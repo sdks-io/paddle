@@ -1,0 +1,14 @@
+{
+  "name": "paddle",
+  "displayName": "Paddle API",
+  "version": "0.0.1",
+  "description": "Integrate and consume the APIMatic-generated Paddle API SDK — bundled skills for TypeScript.",
+  "author": {
+    "name": "Muhammad Rafay",
+    "email": "muhammad.rafay@apimatic.io"
+  },
+  "license": "MIT",
+  "skills": [
+    "./skills/typescript"
+  ]
+}
