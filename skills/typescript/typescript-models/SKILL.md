@@ -184,12 +184,12 @@ convert.
   fail; and a **`s.dateOnly()` field is a `string`**, so `new Date(...)` there is a type error and
   formatting `"YYYY-MM-DD"` is yours to do.
 
-- **Every numeric kind is a `number`.** `int32`, `int64`, `float`, `double` and a big-decimal all map
-  to `number`, checked with `s.number()`; the model's property type is the source of truth and it
-  never says which. An `int64` past `Number.MAX_SAFE_INTEGER` has already lost precision in
-  `JSON.parse` before any schema sees it — the engine's `bigint` path is on the parameter serializer,
-  not on model properties — so treat a large-integer field as something to verify against the
-  provider rather than as a safe round-trip.
+- **Every numeric kind is a `number`; the schema says which check runs.** `int32` and `int64` are
+  checked with `s.int()`, which rejects a fraction and anything outside the safe-integer range.
+  `float`, `double` and a big-decimal are checked with `s.float64()`, which rejects `NaN` and
+  `±Infinity`. Neither checks the `int32` or `float` range. An `int64` past
+  `Number.MAX_SAFE_INTEGER` is rejected rather than rounded, so treat a large-integer field as
+  something to verify against the provider rather than as a safe round-trip.
 
 - **There is no decimal type.** A `number` is an IEEE-754 double, so a spec that models money as a
   number hands you binary floating point and the usual accumulation errors. Many APIs instead model

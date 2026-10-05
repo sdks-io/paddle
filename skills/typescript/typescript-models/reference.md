@@ -39,7 +39,8 @@ object, and mutating it changes nothing on the wire by itself.
 | `time` | `string` | `s.string()` — unchecked |
 | `date` | `string` | `s.dateOnly()` |
 | `date-time` (ISO 8601 / RFC 1123 / unix) | `Date` | `s.dateTime()` / `s.rfc1123DateTime()` / `s.unixSecondsDateTime()` |
-| int32, int64, float, double, big-decimal | `number` | `s.number()` |
+| int32, int64 | `number` | `s.int()` |
+| float, double, big-decimal | `number` | `s.float64()` |
 | boolean | `boolean` | `s.boolean()` |
 | binary, file — as a declared <em>field</em> | `Uint8Array` | `s.bytes()` (base64) |
 | a value the spec fixed | that literal type | `s.literal(value)` |
@@ -158,7 +159,7 @@ export const {enum}Schema = s.enumOf<{Enum}>({Enum});
 | --- | --- |
 | Type | **open** — the `(string & {})` / `(number & {})` tail admits any value of the base type |
 | Wire value | the member's value, verbatim (`"active"`, or `1` for a number enum) |
-| Decoding | checks the **base type only** — `s.enumOf` builds `s.string()` or `s.number()` from the members and validates nothing else, so an unknown member is accepted |
+| Decoding | checks the **base type only** — `s.enumOf` builds a string or a number check from the members and validates nothing else, so an unknown member is accepted |
 | Known set | `{enum}Schema.values` — `readonly {Enum}[]`, in declaration order |
 | Member names | generated identifiers; a number enum's members are `_0`, `_1`, … |
 
@@ -318,8 +319,9 @@ has no visible effect at all. A key you need but the type lacks means the spec d
 
 ## What is never validated
 
-`s.string()` carries no format check and no length or pattern check; `s.number()` carries no range or
-`multipleOf` check; arrays carry no `uniqueItems` check. The generator does not transcribe those
+`s.string()` carries no format check and no length or pattern check; `s.int()` and
+`s.float64()` carry no `minimum`, `maximum` or `multipleOf` check; arrays carry no `uniqueItems` check.
+The generator does not transcribe those
 constraints, so there is nothing to read and nothing to invoke — they are enforced only by the
 provider, as a `400`. `api-reference.md` carries the documented contract; put your own guard at your
 own boundary if you want one before the round-trip.
