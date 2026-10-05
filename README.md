@@ -4,11 +4,11 @@ A plugin whose skills teach a coding agent to install and use the APIMatic-gener
 
 ## What's inside
 
-One skill set per language. The entry point is that language's getting-started skill, which carries what is specific to this SDK; the rest are API-agnostic and describe how to use any SDK the same generator produces.
+One skill set per language. The entry point is that language's getting-started skill, which carries what is specific to this SDK; `typescript-paddle-billing` carries what to build with Paddle Billing and in what order (recipes, templates and agent scripts); the rest are API-agnostic and describe how to use any SDK the same generator produces.
 
 | Language | Skill prefix | Skills |
 | --- | --- | --- |
-| TypeScript | `typescript-` | `typescript-authentication`, `typescript-calling-endpoints`, `typescript-client-initialization`, `typescript-configuration-resilience`, `typescript-error-handling`, `typescript-getting-started`, `typescript-integrate-paddle-api`, `typescript-models`, `typescript-testing` |
+| TypeScript | `typescript-` | `typescript-authentication`, `typescript-calling-endpoints`, `typescript-client-initialization`, `typescript-configuration-resilience`, `typescript-error-handling`, `typescript-getting-started`, `typescript-integrate-paddle-api`, `typescript-models`, `typescript-paddle-billing`, `typescript-testing` |
 
 ## Install
 
