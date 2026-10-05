@@ -13,7 +13,7 @@ const { mrr, subscribers, revenue } = await getRevenueMetrics("2026-09-01", "202
 // mrr.timeseries[] { timestamp, amount }, subscribers.timeseries[] { timestamp, count }, revenue.timeseries[]
 ```
 
-Available: revenue, monthly recurring revenue, MRR change, active subscribers, chargebacks, checkout conversion, refunds (`client.metrics.getMetrics*`). Data lags about 24 hours; cache for an hour. **The Metrics API is not available in sandbox**: the metrics endpoints tested there (MRR, active subscribers) returned 404 `not_available_in_sandbox` on 5 Oct 2026; expect the same from the others. Build the code against the SDK types, test it with a stubbed `fetch`, and treat 404 `not_available_in_sandbox` as "no data" in development; real numbers appear only on live.
+Available: revenue, monthly recurring revenue, MRR change, active subscribers, chargebacks, checkout conversion, refunds (`client.metrics.getMetrics*`). Data lags about 24 hours; cache for an hour. **The Metrics API is not available in sandbox**: its operations return 404 `not_available_in_sandbox` there. Build the code against the SDK types, test it as `typescript-testing` describes, and treat 404 `not_available_in_sandbox` as "no data" in development; real numbers appear only on live.
 
 ## CSV reports (accounting exports)
 
@@ -27,10 +27,12 @@ Types: `transactions`, `transaction_line_items`, `adjustments`, `adjustment_line
 
 ## Transactions and invoices per customer (support view)
 
-`client.transactions.listTransactions({ customerId: [ctm], perPage: 30, orderBy: "created_at[DESC]" })` (max 30 per page; page with `listAll`), with `include: ["adjustments"]` for refunds. Invoice PDF per transaction: `getInvoiceUrl`. Subscription history (who changed what): `GET /subscriptions/{id}/history` (SDK resource `subscriptionHistoryApi.listSubscriptionHistory`).
+`client.transactions.listTransactions` filtered by the customer and, when needed, by status; at most 30 per page (page with `listAll`); include `adjustments` to show refunds (fields: `map/operations/transactions.md`). Invoice PDF per transaction: `getInvoiceUrl`. Subscription history (who changed what): `client.subscriptionHistoryApi.listSubscriptionHistory` (fields: `map/operations/subscription-history-api.md`).
 
 ## Where the owner looks instead
 
 The Paddle dashboard (`vendors.paddle.com`): reports and exports, transactions, customers, payouts and statements (monthly payouts), and the notifications log for webhook deliveries (replay with `client.notifications.replayNotification`). Point the owner there from the first sale.
 
-Done when: the owner can open the dashboard areas above; CSV exports work in sandbox; in-app metrics handle sandbox's 404 `not_available_in_sandbox` and are confirmed on live.
+## Done when
+
+The owner can open the dashboard areas above; CSV exports work in sandbox; in-app metrics handle sandbox's 404 `not_available_in_sandbox` and are confirmed on live.

@@ -9,14 +9,14 @@ Paddle is the legal seller of record. It calculates, collects and remits sales t
 Needs: what is sold. Produces: correct `tax_category` on products, `tax_mode` on prices.
 
 - `tax_category`: `saas` for software access, `standard` for most other digital goods/services; `digital-goods`, `ebooks`, `training-services`, `implementation-services`, `professional-services`, `software-programming-services`, `website-hosting` need the owner's approval in Paddle > Settings > Taxable categories first (`product_tax_category_not_approved`). Wrong categories change the tax charged, so ask when unsure.
-- `tax_mode` per price: `account_setting` (default; follows Paddle > Settings > Sales tax), `internal` (price includes tax; the customer pays the sticker price everywhere and the owner's net varies by country), `external` (tax added at checkout), `location` (inclusive or exclusive by the buyer's country norm). Consumer products in EU/UK/AU usually `internal` or `location`; US B2B usually `external`.
+- `tax_mode` per price: `account_setting` (default; follows Paddle > Settings > Sales tax), `internal` (price includes tax; the customer pays the listed price everywhere and the owner's net varies by country), `external` (tax added at checkout), `location` (inclusive or exclusive by the buyer's country norm). Consumer products in EU/UK/AU usually `internal` or `location`; US B2B usually `external`.
 - The checkout asks the buyer for country (and postal code in AU, CA, DE, ES, FR, GB, IT, NL, IN, US) and a business tax ID when relevant; reverse charge and exemptions are Paddle's job. The app never computes tax.
 
 ## 2. Localized prices
 
 Needs: target countries and amounts. Produces: `unit_price_overrides` on prices; a pricing page that shows local totals.
 
-- Without an override, the price shown depends on the account's currency settings (a sandbox preview for GB returned USD on 5 Oct 2026); set explicit overrides for markets where you want round numbers: `PATCH /prices/{id}` with the complete `unit_price_overrides` array (`[{ countryCodes: ["GB"], unitPrice: { amount: "1500", currencyCode: "GBP" } }, …]`, max 250; `[]` removes all). Add `"unitPriceOverrides"` support to the seed file if the owner wants this managed in code; otherwise the owner edits them in the dashboard.
+- Without an override, the price shown depends on the account's currency settings (a preview for GB can return USD); set explicit overrides for markets where you want round numbers: `client.prices.updatePrice` with the complete `unitPriceOverrides` list, each entry a set of country codes and a unit price (at most 250; an empty list removes all). Fields: `map/operations/prices.md`. Add `"unitPriceOverrides"` support to the seed file if the owner wants this managed in code; otherwise the owner edits them in the dashboard.
 - Pricing page: `Paddle.PricePreview` in the browser (geolocates by IP; `address.countryCode` to force) or `previewLocalizedPrices` on the server. Both return `formattedTotals` already including or excluding tax per the mode, and the currency Paddle will charge. Never format money yourself from `unit_price`.
 - Supported currencies: USD, EUR, GBP, JPY, AUD, CAD, CHF, HKD, SGD, SEK, ARS, BRL, CLP, CNY, COP, CZK, DKK, HUF, ILS, INR, KRW, MXN, NOK, NZD, PEN, PLN, RUB, THB, TRY, TWD, UAH, VND, ZAR. Zero-decimal: JPY, KRW, CLP, VND (`"1000"` = ¥1000).
 
@@ -41,10 +41,10 @@ Paddle handles disputes; the app only reacts to `adjustment.*` (recipe 05). The 
 - Fees: 5% + $0.50 per transaction (bespoke for sub-$10 items and high volume); payouts monthly with statements. The owner sees fees and earnings per transaction in `details.payout_totals` and in Paddle > Payouts.
 - Prohibited products: Paddle's Acceptable Use Policy decides. It restricts, among others, gambling, adult content, financial services, crypto, physical goods, pure consulting or services, VPNs, unauthorized resale, and content using someone's likeness. If the product is near any of these, tell the owner to confirm with Paddle before building.
 
-## 7. Done when
-
-Tax category and tax mode are confirmed with the owner, the pricing page shows Paddle-computed localized totals, the invoice link works for a completed sandbox transaction, and the site has the four required pages (pricing, terms, refund policy, privacy policy).
-
-## 8. Data handling
+## 7. Data handling
 
 The app never receives card data; Paddle.js and Paddle's checkout handle PCI scope. Store only what `schema.sql` lists; leave `include_sensitive_fields` off on destinations; do not log webhook payloads with customer addresses in plain text beyond what the events table needs for retries (or redact `data.address`/`data.customer` before storing).
+
+## 8. Done when
+
+Tax category and tax mode are confirmed with the owner, the pricing page shows Paddle-computed localized totals, the invoice link works for a completed sandbox transaction, and the site has the four required pages (pricing, terms, refund policy, privacy policy).

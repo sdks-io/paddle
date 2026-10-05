@@ -49,15 +49,17 @@ A base plan may be a $0 recurring price so that the customer's renewal consists 
 
 Needs: one-time prices for the packs (recipe 02), `credit_ledger` table. Produces: an app-side balance.
 
-1. Sell packs with checkout; on `transaction.completed` (one-time), `onPurchaseCompleted` adds `+credits × quantity` to `credit_ledger` with `transactionId` and reason `purchase`. The `UNIQUE(transaction_id, reason)` constraint makes a redelivered webhook harmless.
-2. Deduct with `addCredits({ userId, delta: -n, reason: "usage" })` inside the request that consumes them; refuse when `getCreditBalance(userId) < n`.
+1. Sell packs with checkout; on `transaction.completed` (one-time), `onPurchaseCompleted` adds `+credits × quantity` for each pack in its `items` to `credit_ledger` with `transactionId` and reason `purchase`. The `UNIQUE(transaction_id, reason)` constraint makes a redelivered webhook harmless.
+2. Deduct with `store.addCredits({ userId, delta: -n, reason: "usage" })` inside the request that consumes them; refuse when `store.getCreditBalance(userId) < n`.
 3. On a refund (`adjustment.updated`, `status: "approved"`, `action: "refund"`), add a negative `refund` entry for that `transactionId`.
 4. Show the balance and a "buy more" button; optionally auto-top-up with pattern B when a subscription exists.
 
 Credits never expire unless the app enforces it; say so to the user, since some jurisdictions regulate expiring prepaid credits.
 
-Done when: the chosen pattern is recorded in the plan, a sandbox test exercised it end to end (seat change, charge, or pack purchase), and the webhook/ledger reflects it.
-
 ## What to tell the user
 
-Use the fixed wording in SKILL.md section 14 ("Paddle does not meter usage itself…"). Record the chosen pattern in the plan so later sessions do not switch it.
+Use the fixed wording in SKILL.md section 14 ("Paddle does not meter usage itself…"). Record the chosen pattern in `paddle-api-plan.md` so later sessions do not switch it.
+
+## Done when
+
+The chosen pattern is recorded in `paddle-api-plan.md`, a sandbox test exercised it end to end (seat change, charge, or pack purchase), and the webhook/ledger reflects it.

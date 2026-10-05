@@ -26,11 +26,11 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | every delivery 401 `signature_mismatch` | body parsed before verification; wrong secret; secret from the other environment or another destination | raw body parser on the route, before `express.json()`; copy the secret from the destination actually posting |
-| 401 `timestamp_out_of_tolerance` | server clock skew or slow queue before verification | sync clocks; verify at the edge; raise `PADDLE_WEBHOOK_TOLERANCE_SECONDS` modestly |
+| 401 `timestamp_out_of_tolerance` | server clock skew or slow queue before verification | sync clocks; verify before any queue; raise `PADDLE_WEBHOOK_TOLERANCE_SECONDS` modestly |
 | nothing arrives | destination inactive, wrong URL, events not subscribed, firewall blocks Paddle IPs, simulation sent to a `platform`-only destination (simulated deliveries show under the simulation run's events, not in `/notifications`) | `paddle-inspect.ts webhooks` shows destinations and recent notification statuses; `client.notificationLogs.listNotificationLogs` shows the response your endpoint gave |
 | events processed twice | no `event_id` dedupe | `recordEvent` insert-if-absent |
-| access flips back after an upgrade | older `subscription.updated` applied after a newer one | compare `occurred_at` (handler does) |
-| `paddle_webhook_events.error` set | handler threw (DB down, bad mapping) | fix, then replay from the dashboard or `replayNotification`; or a sweeper re-runs rows with `processed_at IS NULL` |
+| access reverts after an upgrade | older `subscription.updated` applied after a newer one | compare `occurred_at` (handler does) |
+| `paddle_webhook_events.error` set | handler threw (DB down, bad mapping) | fix, then replay from the dashboard or `replayNotification`; or a scheduled job re-runs rows with `processed_at IS NULL` |
 
 ## Subscriptions and transactions
 
@@ -50,7 +50,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | `transaction_immutable` / `transaction_invalid_status_change` | billed/completed transactions cannot change | create a new transaction or an adjustment |
 | `transaction_price_different_billing_cycle` | mixed intervals in one checkout | split or align |
 | `transaction_balance_less_than_charge_limit` | amount under ~70 US cents | raise the price / avoid tiny prorations |
-| 400 `invalid_field` on `address_id` | `addressId` without `customerId` (observed in sandbox, 5 Oct 2026) | pass both |
+| 400 `invalid_field` on `address_id` | `addressId` without `customerId` | pass both |
 | `invalid_field` (400) with `errors[]` | validation | read `fieldErrors`; check the field and its enum values in the SDK map |
 | `adjustment_transaction_invalid_status_for_refund` | transaction not `completed` | wait for completion |
 | `adjustment_pending_refund_request` | refund already pending | wait for `adjustment.updated` |

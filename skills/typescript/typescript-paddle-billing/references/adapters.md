@@ -19,7 +19,7 @@ app.post("/api/paddle/webhook", express.raw({ type: "application/json" }), paddl
 app.use(express.json());
 app.get("/api/billing/entitlement", requireAuth, async (req, res) => res.json(await getEntitlement(store, req.user.id)));
 app.post("/api/billing/portal", requireAuth, async (req, res) => {
-  const customerId = await ensureCustomer(store, req.user.id, req.user.email);
+  const customerId = await ensureCustomer(store, req.user.id, req.user.email, { emailVerified: req.user.emailVerified });
   res.json(await createPortalSession(customerId));
 });
 ```

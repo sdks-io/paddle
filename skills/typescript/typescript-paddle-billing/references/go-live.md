@@ -6,7 +6,7 @@ Sandbox and live are separate Paddle accounts. Nothing is shared: catalog, custo
 
 | Moment | Raise |
 | --- | --- |
-| The user names the production domain (any time) | Domain approval, because it is the long pole (often automatic; otherwise 5–7 business days). Each domain and subdomain that opens a checkout must be approved separately; the site must show pricing, Terms & Conditions with the company name, Refund Policy, Privacy Policy, and use HTTPS |
+| The user names the production domain (any time) | Domain approval, because it is the step that takes longest (often automatic; otherwise 5–7 business days). Each domain and subdomain that opens a checkout must be approved separately; the site must show pricing, Terms & Conditions with the company name, Refund Policy, Privacy Policy, and use HTTPS |
 | The sandbox flow passes (recipe 01 step 8) | Live account signup and business/identity verification (owner only); nothing else yet |
 | The user says "go live" | The checklist below |
 | First live purchase succeeded | Payout details, balance currency, tax settings review, Retain/dunning settings, `api_key.expiring` alerting |
@@ -17,7 +17,7 @@ If the user is not ready, keep `PADDLE_ENV=sandbox`, keep the Test Mode watermar
 
 Owner, in the live dashboard (`vendors.paddle.com`):
 
-1. Live account created; business verification and identity verification complete (`GET /verifications` reports `onboarding` and `domain` status; it exists only on live).
+1. Live account created; business verification and identity verification complete (the owner checks verification status in the live dashboard).
 2. Website approval: every checkout domain approved.
 3. Default payment link set to the real page (e.g. `https://app.example.com/pay`) on an approved domain.
 4. Checkout configuration mirrored from sandbox: payment methods, styling, Sales tax inclusive/exclusive, balance currency, taxable categories approved as needed.
@@ -26,7 +26,7 @@ Owner, in the live dashboard (`vendors.paddle.com`):
 
 Agent, once the owner confirms 1–5:
 
-7. Set production env: `PADDLE_ENV=production` and browser `environment: "production"`; against production, create the client-side token once with `client.clientTokens.createClientToken({ body: { name } })` and set it as `PADDLE_CLIENT_TOKEN` (the live token starts with `live_`).
+7. Set production env: `PADDLE_ENV=production` and browser `environment: "production"`; against production, create the client-side token once with `client.clientTokens.createClientToken` (fields: `map/operations/client-tokens.md`) and set it as `PADDLE_CLIENT_TOKEN` (the live token starts with `live_`).
 8. `npx tsx scripts/paddle/paddle-inspect.ts whoami` against production (prints `environment: production`).
 9. Seed the live catalog with the same `paddle-catalog.json`: `paddle-seed-catalog.ts` → **new** price IDs. Update `plan_catalog` (and any env vars) with the live IDs; sandbox IDs (`pri_…`) will not exist in live.
 10. Create the live destination the same way (SKILL.md section 7) with `destination: "https://app.example.com/api/paddle/webhook"` → the owner stores the secret from `paddle-webhook-secret.local` as `PADDLE_WEBHOOK_SECRET` in the production secret store (webhook-secret message, SKILL.md section 14); then delete the file. Allow live IPs if filtering (`getIpAddresses()` in production).

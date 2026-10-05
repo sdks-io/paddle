@@ -10,8 +10,9 @@ Paddle constraints that apply to every change: no change within 30 minutes of `n
 
 Needs: `sub_…`, current items (from the row or `getSubscriptionWithNext`), target `pri_…`. Produces: a new plan, optional immediate transaction.
 
-1. Preview so the customer sees the money: `changePlan(subId, [{ priceId: newPriceId, quantity }], mode, { preview: true })`. Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
-2. Apply with the same arguments without `preview`.
+1. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
+2. Preview so the customer sees the money: `changePlan(subId, [{ priceId: newPriceId, quantity }], mode, { preview: true })`. Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
+3. Apply with the same arguments without `preview`.
 
 Choosing `mode` (`proration_billing_mode`):
 
@@ -22,9 +23,9 @@ Choosing `mode` (`proration_billing_mode`):
 | Switch monthly ↔ yearly | `prorated_immediately` or `full_immediately` | billing-frequency changes allow only `prorated_immediately`, `full_immediately`, `do_not_bill` |
 | Change during trial | `do_not_bill` | the only mode allowed while `trialing`; price takes effect at trial end |
 | Change while paused | `do_not_bill` | the only mode allowed while `paused` |
-| Free change (goodwill) | `do_not_bill` | no charge, no credit |
+| Free change (goodwill) | `do_not_bill` | no charge, no credit; the owner's decision, never from a customer request |
 
-Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]`. Credits larger than the charge land on the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, the default `on_payment_failure: "prevent_change"` keeps the old plan; tell the customer to update the payment method.
+Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]`. Credits larger than the charge are added to the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, the default `on_payment_failure: "prevent_change"` keeps the old plan; tell the customer to update the payment method.
 
 ## Trials
 
@@ -40,7 +41,7 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 - Default (recommended): `cancelSubscription(subId)` → stays `active`, `scheduled_change: { action: "cancel", effective_at }`, `next_billed_at: null`. The entitlement keeps access until `endsAt`. Offer "Undo cancellation": `removeScheduledChange(subId)`.
 - Immediate: `cancelSubscription(subId, "immediately")` → `canceled` now, access ends now, **no automatic refund**; refund separately (recipe 05) if the policy says so. Ask the user before using this; it cannot be undone and a canceled subscription cannot be reinstated.
 - Paused subscriptions cancel immediately whatever `effective_from` says.
-- Alternative without code: the portal's `cancelSubscription` URL. Retain's cancellation flows (live only) can sit in front of this.
+- Alternative without code: the `cancelUrl` from `createPortalSession`. Retain's cancellation flows (live only) can run before this.
 
 ## Pause and resume
 
@@ -59,14 +60,14 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 
 ## Discounts on an existing subscription
 
-`client.subscriptions.updateSubscription({ subscriptionId, body: { discount: { id: "dsc_…", effectiveFrom: "next_billing_period" } } })`; remove it with `discount: null` (or in the dashboard). See recipe 06 for creating discounts.
-
-## Done when
-
-The change shows in the Paddle dashboard, `subscription.updated` has arrived and the mirror row reflects it, and the UI re-read the entitlement.
+`client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`); remove it with `discount: null` (or in the dashboard). See recipe 06 for creating discounts.
 
 ## Checks
 
 - Preview before any change that charges; show the amount and currency from the preview, not computed locally.
 - Catch `subscription_locked_renewal` / `subscription_update_when_past_due` and show "try again after your renewal" / "update your payment method first".
 - Never call these for a subscription the current user does not own.
+
+## Done when
+
+The change shows in the Paddle dashboard, `subscription.updated` has arrived and the mirror row reflects it, and the UI re-read the entitlement.

@@ -26,14 +26,12 @@ Flat discounts: `type: "flat"` or `"flat_per_seat"`, `amount` in minor units, `c
 
 - At checkout: `openCheckout(config, { …, discountCode: "LAUNCH20" })`, or let the customer type it (`showAddDiscounts` is on by default).
 - On a server-created transaction: `discountId` in `createCheckoutTransaction`.
-- On an existing subscription: `updateSubscription({ subscriptionId, body: { discount: { id, effectiveFrom: "next_billing_period" } } })`.
+- On an existing subscription: `client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`).
 - One-off, non-catalog discount on a single transaction: the transaction create body accepts an inline `discount` object (`mode: "custom"`); these do not appear in discount lists.
 
 ## Monitor and stop
 
-`findDiscountByCode(code)` → `timesUsed`, `usageLimit`, `expiresAt`, `status`. Stop a code with `archiveDiscount(id)`; an archived entity stays related to existing subscriptions (Paddle's archive semantics), so current subscribers are not affected. Discounts cannot be deleted.
-
-Done when: the code applies at a sandbox checkout and `timesUsed` increments.
+`findDiscountByCode(code)` finds active codes only (an archived code returns nothing) → `timesUsed`, `usageLimit`, `expiresAt`. Stop a code with `archiveDiscount(id)`; an archived entity stays related to existing subscriptions (Paddle's archive semantics), so current subscribers are not affected. Discounts cannot be deleted.
 
 ## Webhook
 
@@ -42,3 +40,7 @@ Done when: the code applies at a sandbox checkout and `timesUsed` increments.
 ## Errors
 
 `discount_code_conflict` (code exists), `discount_usage_limit_exceeded`, `discount_expired`, `transaction_discount_not_eligible` (restricted to other items), `transaction_invalid_discount_currency`.
+
+## Done when
+
+The code applies at a sandbox checkout and `timesUsed` increments.

@@ -25,7 +25,9 @@ Live auto-approval happens only when the account is verified, the amount is at m
 
 ## Partial refund
 
-Needs: the transaction's line items: `client.transactions.getTransaction({ transactionId })` → `data.details.lineItems[]` with `id` (`txnitm_…`) and `totals`. Produces: `adj_…`.
+Needs: the transaction's line items from `client.transactions.getTransaction` (`data.details.lineItems[]`, each with an `id` `txnitm_…` and `totals`). Produces: `adj_…`.
+
+`refundLineItems` calls `client.adjustments.createAdjustment` with one entry per line item, each `type: "partial"` (with an amount) or `type: "full"` (fields: `map/operations/adjustments.md`).
 
 ```ts
 await refundLineItems(transactionId, "Refund 1 of 3 seats", [{ lineItemId: "txnitm_…", amount: "1900" }]);
@@ -50,12 +52,12 @@ Paddle creates `adjustment.created` with `action: "chargeback"` (and later `char
 
 `listAdjustments({ customerId })` or `{ transactionId }` (per page max 50). Fields: `action`, `status`, `totals.total`, `currencyCode`, `createdAt`.
 
-## Done when
-
-The adjustment exists in Paddle, `adjustment.updated` with `approved` (sandbox: within about 10 minutes) has been handled, and access or credits were revoked accordingly.
-
 ## Checks
 
 - Only `completed` transactions can be refunded (`adjustment_transaction_invalid_status_for_refund`).
 - Refund approval can take time on live; show "refund requested" until `approved`.
 - Idempotency: creating the same refund twice fails with `adjustment_pending_refund_request` while the first is pending, but an approved refund followed by another call refunds again if any amount remains — guard with your own "refunded" flag.
+
+## Done when
+
+The adjustment exists in Paddle, `adjustment.updated` with `approved` (sandbox: within about 10 minutes) has been handled, and access or credits were revoked accordingly.

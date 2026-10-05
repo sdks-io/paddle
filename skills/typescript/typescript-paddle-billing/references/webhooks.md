@@ -4,11 +4,11 @@ Code: `templates/server/paddle/webhooks/*`. Destination: created once by the age
 
 ## Rules (from Paddle's webhook documentation)
 
-1. **Verify first.** Header `Paddle-Signature: ts=<unix seconds>;h1=<hex>` (several `h1` during secret rotation). Signed payload is `${ts}:${rawBody}`; HMAC-SHA256 with the destination's `endpoint_secret_key` (`pdl_ntfset_…`), hex, constant-time compare. The body must be the raw bytes. Reject when `|now − ts|` exceeds the tolerance (Paddle's SDKs use 5 seconds; `PADDLE_WEBHOOK_TOLERANCE_SECONDS` to loosen when a queue sits in front of the handler).
+1. **Verify first.** Header `Paddle-Signature: ts=<unix seconds>;h1=<hex>` (several `h1` during secret rotation). Signed payload is `${ts}:${rawBody}`; HMAC-SHA256 with the destination's `endpoint_secret_key` (`pdl_ntfset_…`), hex, constant-time compare. The body must be the raw bytes. Reject when `|now − ts|` exceeds the tolerance (Paddle's SDKs use 5 seconds; `PADDLE_WEBHOOK_TOLERANCE_SECONDS` to loosen when a queue runs before the handler).
 2. **Answer 200 within 5 seconds.** Do the work after answering (queue) or keep inline processing fast. A non-2xx or a timeout makes Paddle retry: live 60 attempts over 3 days (20 in the first hour), sandbox 3 attempts in 15 minutes; then the notification is `failed` and can be replayed with `replayNotification`.
-3. **At-least-once.** The same `event_id` can arrive twice (and per destination each delivery has its own `notification_id`). Insert `event_id` into `paddle_webhook_events` first; a conflict means skip.
+3. **At-least-once.** The same `event_id` can arrive twice (and per destination each delivery has its own `notification_id`). Insert `event_id` into `paddle_webhook_events` first; a conflict with a processed row means skip. A row whose processing failed is processed again on the redelivery.
 4. **Unordered.** Compare `occurred_at` with the row's `last_event_occurred_at`; ignore older events. Never infer state from arrival order or from the event name alone — read `data.status`.
-5. **Full entity in `data`.** Every event carries the whole entity as it was at `occurred_at`, in snake_case. Subscription payloads omit `management_urls` (they are temporary).
+5. **Full entity in `data`.** Every event carries the whole entity as it was at `occurred_at`. The handler decodes it with the SDK's model for that event type (`webhooks/types.ts`). Subscription payloads omit `management_urls` (they are temporary).
 6. **Source IPs** (if you filter): sandbox `34.194.127.46, 54.234.237.108, 3.208.120.145, 44.226.236.210, 44.241.183.62, 100.20.172.113`; live `34.232.58.13, 34.195.105.136, 34.237.3.244, 35.155.119.135, 52.11.166.252, 34.212.5.7`; or `client.ipAddresses.getIpAddresses()` per environment. Let the webhook path bypass WAF bot checks.
 7. **Destinations**: `type: "url"`, HTTPS, max 10 active; `traffic_source: "all"` to receive simulations too; events list is replaced on update (send the complete list); `api_version: 1`. The secret is readable on GET of the destination; rotation is not offered by the API (create a new destination, switch, delete the old).
 
@@ -22,7 +22,7 @@ Code: `templates/server/paddle/webhooks/*`. Destination: created once by the age
 | `subscription.trialing` | created in trial | mirror upserted |
 | `subscription.past_due` | a renewal payment failed | show banner, email customer; keep access |
 | `subscription.paused` / `resumed` / `canceled` | status changes | mirror upserted from the event's `data`; hook for emails |
-| `transaction.completed` | payment captured and processed | **fulfil one-time purchases** (`subscription_id` null); renewals/charges also complete — ignore for access, use for receipts |
+| `transaction.completed` | payment captured and processed | **fulfil one-time purchases**: every item when `subscriptionId` is null, and the one-time items of a subscription checkout; renewals and charges (origin `subscription_*`) also complete — ignore for access, use for receipts |
 | `transaction.payment_failed` | a payment attempt failed (checkout or renewal) | `onPaymentFailed` hook: notify; Paddle retries renewals |
 | `transaction.paid` | captured but not yet processed | do nothing (may lack `invoice_number`, `subscription_id`) |
 | `transaction.billed` | invoice issued (manual collection) | B2B invoicing only |
@@ -50,11 +50,11 @@ Order of preference in `handler.ts`: `data.custom_data.user_id` (set by the app 
 
 ## Testing webhooks
 
-- Simulator: `scripts/paddle-inspect.ts simulate <ntfset_…> subscription_creation|subscription_renewal|subscription_pause|subscription_resume|subscription_cancellation|<any event type>`. The destination must have `traffic_source` `simulation` or `all`. Simulated payloads use example IDs unless configured (and their `event_id`/`notification_id` start with `ntfsimevt_`/`ntfsimntf_`, not `evt_`/`ntf_`); the handler stores them like real ones, so use a dev database. Simulated deliveries do **not** appear in `GET /notifications`; read them under the simulation run (`GET /simulations/{id}/runs/{run_id}/events` → each event's `status`, `request.body`, `response.status_code`) or in Paddle > Events > Simulations.
+- Simulator: `scripts/paddle-inspect.ts simulate <ntfset_…> subscription_creation|subscription_renewal|subscription_pause|subscription_resume|subscription_cancellation|<any event type>`. The destination must have `traffic_source` `simulation` or `all`. Simulated payloads use example IDs unless configured (and their `event_id`/`notification_id` start with `ntfsimevt_`/`ntfsimntf_`, not `evt_`/`ntf_`); the handler stores them like real ones, so use a dev database. Simulated deliveries do **not** appear in `client.notifications.listNotifications`; read them under the simulation run with `client.simulationRunEvents.listSimulationsEvents` (each event's `status`, `request.body`, `response.status_code`; fields: `map/operations/simulation-run-events.md`) or in Paddle > Events > Simulations.
 - Local development: expose the dev server with a tunnel and create a separate destination for it; delete it when done.
 - Unit tests: `templates/tests/webhook-verify.test.ts`, `templates/tests/webhook-handler.test.mts` (no network).
-- Replays: `client.notifications.listNotifications` shows every delivery and its status; `client.notifications.replayNotification({ notificationId })` resends a `delivered` or `failed` original.
+- Replays: `client.notifications.listNotifications` shows every delivery and its status; `client.notifications.replayNotification` resends a `delivered` or `failed` original (fields: `map/operations/notifications.md`).
 
 ## Fallback when webhooks are unavailable
 
-If the endpoint cannot be public (some previews), poll instead: on the page after `checkout.completed`, call a server route that runs `client.transactions.getTransaction({ transactionId })` and, when `status === "completed"`, `client.subscriptions.getSubscription(...)`, and writes the same rows the handler would. Keep the webhook as the source of truth once the app is deployed; polling misses renewals, cancellations and refunds.
+If the endpoint cannot be public (some previews), poll instead: on the page after `checkout.completed`, call a server route that runs `client.transactions.getTransaction` and, when the transaction's `status` is `"completed"`, `client.subscriptions.getSubscription`, and writes the same rows the handler would. Keep the webhook as the source of truth once the app is deployed; polling misses renewals, cancellations and refunds.
