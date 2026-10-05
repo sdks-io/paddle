@@ -28,11 +28,10 @@ function getPaddle(): { config: PaddleConfig; client: PaddleApiClient } {
     const client = new PaddleApiClient({
       bearerAuth: config.apiKey,
       serverOptions: { baseUrl: config.apiBaseUrl },
-      // Retrying is on by default for GET/HEAD/PUT/OPTIONS on 408/429/5xx.
-      // Paddle documents no idempotency key (the SDK sends an Idempotency-Key
-      // header per call, which Paddle does not document honouring), so POST and
-      // PATCH are deliberately NOT added to httpMethodsToRetry: a repeated
-      // POST /transactions would create a second transaction. See checkout.ts.
+      // Retry settings -> typescript-configuration-resilience.
+      // Paddle documents no idempotency key, so POST and PATCH are deliberately
+      // NOT added to httpMethodsToRetry: a repeated POST /transactions would
+      // create a second transaction. See checkout.ts.
       retry: { maxRetries: 3, timeout: 30_000 },
     });
     cached = { config, client };
