@@ -30,7 +30,7 @@ What Paddle does and what the app builds:
 - **Paddle does:** hosted checkout (overlay or inline via Paddle.js), payment methods and 3-D Secure, tax calculation and remittance worldwide, invoices, receipts and credit notes by email, the customer portal (invoices, payment method update, cancel), dunning retries, refunds and chargebacks, payouts to the owner.
 - **The app builds:** the pricing page and buy buttons, the server route that creates a transaction or portal session, the webhook endpoint, the entitlement check, and the few tables that mirror subscription status.
 
-App contexts: a web app (any Node/TS backend, any frontend); a Next.js app (route handlers; a Node runtime for the webhook); a Replit app (Secrets for keys; see `references/adapters.md`). Native mobile in-app purchases are not a Paddle use case; iOS "link-out" to a web checkout exists but is out of this skill's scope.
+App contexts: a web app (any Node/TS backend, any frontend); a Next.js app (route handlers; a Node runtime for the webhook); an app on a hosting platform that supplies the secret store, database and domain (per-platform notes: `references/adapters.md`). Native mobile in-app purchases are not a Paddle use case; iOS "link-out" to a web checkout exists but is out of this skill's scope.
 
 ## 2. When to use Paddle, and when not
 
@@ -228,7 +228,7 @@ Send these verbatim at the moment named.
   2. Go to **Developer tools > Authentication** (in some accounts: **My account > Settings > Authentication**) and create a new API key.
   3. Name it `<app name> server` and tick these permissions: `<permission list from section 7 for the recipes in scope>`.
   4. Copy the key (it starts with `pdl_sdbx_apikey_`; Paddle shows it only once).
-  5. Add it to this project's secrets as **`PADDLE_API_KEY`** `<platform-specific: e.g. Replit: the Secrets tool; local: the git-ignored .env file>`.
+  5. Add it to this project's secrets as **`PADDLE_API_KEY`** `<platform-specific: the hosting platform's secret store, named in references/adapters.md for that platform; local: the git-ignored .env file>`.
   Reply "done" when it's saved. I'll check that it works without seeing it."
 - **After creating the webhook destination (webhook secret):** "I created the Paddle webhook destination. Its signing secret is in the file `paddle-webhook-secret.local` in the project. Please copy the value after `PADDLE_WEBHOOK_SECRET=` into this project's secrets as **`PADDLE_WEBHOOK_SECRET`**, then reply "done"; I'll delete the file. Don't paste the secret here."
 
@@ -267,5 +267,5 @@ If Paddle access is lost outside the app (key revoked or expired, account suspen
 - `references/webhooks.md` — events to subscribe to, what each means, handling rules.
 - `references/errors.md` — error codes with fixes; what owners and buyers will report.
 - `references/go-live.md` — sandbox → live checklist with timing.
-- `references/adapters.md` — Express, Next.js, Replit specifics.
+- `references/adapters.md` — framework and hosting-platform specifics.
 - `templates/` and `scripts/` — the code; every file states where it goes and what it assumes.

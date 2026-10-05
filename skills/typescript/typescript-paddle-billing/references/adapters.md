@@ -1,6 +1,6 @@
-# Adapters: Express, Next.js, Replit
+# Adapters: frameworks and hosting platforms
 
-The core (`templates/server/paddle/*`) is framework-free. These notes cover what changes per host.
+The core (`templates/server/paddle/*`) is framework-free. These notes cover what changes per framework and per hosting platform. For a platform not listed, apply the same points with that platform's secret store, database and deployment domain.
 
 ## Express (or Fastify/Koa with equivalent raw-body handling)
 
