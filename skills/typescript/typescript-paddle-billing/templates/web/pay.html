@@ -1,0 +1,38 @@
+<!doctype html>
+<!--
+  Default payment link page. Paddle requires a "default payment link" in
+  Paddle > Checkout > Checkout configuration. Paddle builds transaction checkout
+  URLs from it (https://yourapp.com/pay?_ptxn=txn_...) and uses it in emails
+  (e.g. update payment method). The page must load Paddle.js; Paddle.js opens
+  the checkout automatically when _ptxn is in the URL.
+
+  Sandbox: https://localhost/ (or any URL) is accepted. Live: must be an approved
+  domain. Serve this at the path you configured, e.g. /pay.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Checkout</title>
+    <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+  </head>
+  <body>
+    <noscript>Enable JavaScript to complete your purchase.</noscript>
+    <script>
+      // Replace with your build-time values. Only the client-side token belongs here.
+      var PADDLE_ENV = "sandbox"; // "sandbox" | "production"
+      var PADDLE_CLIENT_TOKEN = "test_xxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+      if (PADDLE_ENV === "sandbox") Paddle.Environment.set("sandbox");
+      Paddle.Initialize({
+        token: PADDLE_CLIENT_TOKEN,
+        eventCallback: function (event) {
+          if (event.name === "checkout.completed") {
+            // Access is granted by the webhook, not here. Send the user to a page that waits for it.
+            window.location.href = "/billing/thank-you";
+          }
+        },
+      });
+      // Nothing else to do: with ?_ptxn=txn_... present, Paddle.js opens the checkout for that transaction.
+    </script>
+  </body>
+</html>
