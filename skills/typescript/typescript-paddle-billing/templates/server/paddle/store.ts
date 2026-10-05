@@ -3,14 +3,23 @@
  * project's ORM against the tables in templates/db/schema.sql. Keep the
  * semantics exactly; the webhook handler relies on them:
  *
- * - `recordEvent` must be atomic "insert if absent" on event_id and return
- *   false when the event was already recorded (duplicate delivery).
+ * - `recordEvent` must be atomic on event_id. It returns true when the event
+ *   is new or was recorded but never processed successfully, and false only
+ *   when it was already processed. In SQL:
+ *     INSERT INTO paddle_webhook_events (event_id, event_type, occurred_at, payload)
+ *     VALUES ($1, $2, $3, $4)
+ *     ON CONFLICT (event_id) DO UPDATE SET received_at = now()
+ *       WHERE paddle_webhook_events.processed_at IS NULL
+ *     RETURNING event_id;          -- a returned row means "process it"
+ * - `markEventFailed` records the error and leaves processed_at NULL, so
+ *   Paddle's retry or a scheduled job processes the event again.
  * - `upsertSubscription` / `upsertPurchase` must ignore the write when the row
  *   already holds a newer `lastEventOccurredAt` (webhooks arrive out of order).
  * - `claimTransaction` must rely on a UNIQUE constraint, not a read-then-write.
+ * - `linkCustomer` must keep one user per Paddle customer (UNIQUE on
+ *   paddle_customer_id) and throw rather than move a customer to another user.
  */
-
-export type SubscriptionStatus = "active" | "trialing" | "past_due" | "paused" | "canceled";
+import type { CollectionMode, ScheduledChangeAction, SubscriptionStatus } from "paddle-apimatic-sdk";
 
 export interface SubscriptionRow {
   id: string;
@@ -23,9 +32,9 @@ export interface SubscriptionRow {
   currentPeriodStartsAt: Date | null;
   currentPeriodEndsAt: Date | null;
   nextBilledAt: Date | null;
-  scheduledChangeAction: "cancel" | "pause" | "resume" | null;
+  scheduledChangeAction: ScheduledChangeAction | null;
   scheduledChangeEffectiveAt: Date | null;
-  collectionMode: "automatic" | "manual";
+  collectionMode: CollectionMode | null;
   customData: Record<string, unknown> | null;
   lastEventOccurredAt: Date;
 }
@@ -59,9 +68,12 @@ export interface PaddleStore {
   linkCustomer(userId: string, paddleCustomerId: string, email: string | null): Promise<void>;
 
   // webhook bookkeeping
-  /** Insert the event; return false if event_id already existed. */
+  /** Insert the event; return false only when this event_id was already processed successfully. */
   recordEvent(event: { eventId: string; eventType: string; occurredAt: Date; payload: unknown }): Promise<boolean>;
-  markEventProcessed(eventId: string, error?: string): Promise<void>;
+  /** Sets processed_at and clears error. */
+  markEventProcessed(eventId: string): Promise<void>;
+  /** Records the error; processed_at stays NULL. */
+  markEventFailed(eventId: string, error: string): Promise<void>;
 
   // mirrors
   upsertSubscription(row: SubscriptionRow): Promise<void>;
@@ -71,8 +83,8 @@ export interface PaddleStore {
   listPurchasesForUser(userId: string): Promise<PurchaseRow[]>;
 
   // server-created transactions
-  /** Insert a claim; return the existing transactionId when the key was already claimed (null if claimed but not yet linked). */
-  claimTransaction(claimKey: string, userId: string): Promise<{ claimed: true } | { claimed: false; transactionId: string | null }>;
+  /** Insert a claim; when the key was already claimed, return its transactionId (null if not yet linked) and when it was claimed. */
+  claimTransaction(claimKey: string, userId: string): Promise<{ claimed: true } | { claimed: false; transactionId: string | null; claimedAt: Date }>;
   linkClaimedTransaction(claimKey: string, transactionId: string): Promise<void>;
   releaseClaim(claimKey: string): Promise<void>;
 

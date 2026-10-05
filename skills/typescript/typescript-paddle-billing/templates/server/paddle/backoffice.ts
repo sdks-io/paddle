@@ -2,46 +2,25 @@
  * Back-office operations: discounts, reports (CSV), metrics.
  * These are owner-facing. Expose them only behind admin authorization.
  */
-import type { DiscountType, ReportCreate, CurrencyCode } from "paddle-apimatic-sdk";
+import type { DiscountCreate, ReportCreate } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";
 
 // ---------------------------------------------------------------- discounts
 
-export interface CreateDiscountInput {
-  description: string;
-  type: DiscountType; // "percentage" | "flat" | "flat_per_seat"
-  /** percentage: "0.01".."100"; flat types: minor units as a string, e.g. "500" = $5.00 */
-  amount: string;
-  /** Required for flat types; must match the transaction currency. */
-  currencyCode?: CurrencyCode;
-  /** Letters and numbers, up to 32. Omit to let Paddle generate one (when enabled for checkout). */
-  code?: string;
-  /** Apply on renewals too; cap with maximumRecurringIntervals. Default false = first payment only. */
-  recur?: boolean;
-  maximumRecurringIntervals?: number;
-  /** Total redemptions across all customers (not per customer). */
-  usageLimit?: number;
-  /** Limit to these product or price ids. */
-  restrictTo?: string[];
-  expiresAt?: Date;
-}
+/**
+ * The SDK's DiscountCreate model, minus the fields this helper sets. Paddle rules for the fields:
+ * - amount: percentage "0.01".."100"; flat types: minor units as a string, e.g. "500" = $5.00.
+ * - currencyCode: required for flat types; must match the transaction currency.
+ * - code: letters and numbers, up to 32. Omit to let Paddle generate one (when enabled for checkout).
+ * - recur: apply on renewals too; cap with maximumRecurringIntervals. Default false = first payment only.
+ * - usageLimit: total redemptions across all customers (not per customer).
+ */
+export type CreateDiscountInput = Omit<DiscountCreate, "enabledForCheckout" | "id" | "status" | "timesUsed" | "createdAt" | "updatedAt" | "importMeta">;
 
 /** Creates a checkout-enabled discount code. With trials, the discount applies after the trial. */
 export async function createDiscountCode(input: CreateDiscountInput) {
   const res = await getPaddleClient().discounts.createDiscount({
-    body: {
-      description: input.description,
-      type: input.type,
-      amount: input.amount,
-      currencyCode: input.currencyCode,
-      code: input.code,
-      enabledForCheckout: true,
-      recur: input.recur ?? false,
-      maximumRecurringIntervals: input.maximumRecurringIntervals,
-      usageLimit: input.usageLimit,
-      restrictTo: input.restrictTo,
-      expiresAt: input.expiresAt,
-    },
+    body: { ...input, enabledForCheckout: true, recur: input.recur ?? false },
   });
   return res.data;
 }

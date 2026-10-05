@@ -18,10 +18,21 @@ export interface PaddleBrowserConfig {
   environment: Environments;       // "sandbox" | "production"
   /** Paddle customer id (ctm_) of the signed-in user, when known. Enables Retain features and prefills. */
   customerId?: string;
-  onEvent?: (event: PaddleEventData) => void;
 }
 
 let paddlePromise: Promise<Paddle | undefined> | undefined;
+
+// Paddle.js takes one eventCallback, fixed at initialization. It forwards every event to these
+// listeners, so each component adds its own and removes it when it unmounts.
+const listeners = new Set<(event: PaddleEventData) => void>();
+
+/** Receive Paddle.js events (checkout.completed, checkout.closed, ...). Returns the function that removes the listener. */
+export function addPaddleEventListener(listener: (event: PaddleEventData) => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 /** Idempotent: Paddle.js may be initialized once per page. Call from anywhere; the first call wins. */
 export function getPaddle(config: PaddleBrowserConfig): Promise<Paddle | undefined> {
@@ -30,14 +41,16 @@ export function getPaddle(config: PaddleBrowserConfig): Promise<Paddle | undefin
       token: config.clientToken,
       environment: config.environment,
       pwCustomer: config.customerId ? { id: config.customerId } : {},
-      eventCallback: config.onEvent,
+      eventCallback: (event) => {
+        for (const listener of listeners) listener(event);
+      },
       checkout: {
         settings: {
           displayMode: "overlay",
           theme: "light",
-          // successUrl is optional. Prefer handling `checkout.completed` in eventCallback:
+          // successUrl is optional. Prefer handling `checkout.completed` in a listener:
           // show a "payment received, setting up your account" state and poll your own
-          // /api/billing/entitlement until the webhook has landed. Never grant access from this event.
+          // /api/billing/entitlement until the webhook has been processed. Never grant access from this event.
         },
       },
     });

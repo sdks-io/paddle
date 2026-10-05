@@ -1,6 +1,6 @@
 /**
  * Server-side pieces of checkout and self-service:
- *   ensureCustomer            link your user to a Paddle customer (reuse by email)
+ *   ensureCustomer            link your user to a Paddle customer (reuse by verified email)
  *   createCheckoutTransaction create a transaction to open with Paddle.js or via checkout.url
  *   createPortalSession       customer portal links (invoices, payment method, cancel)
  *   getInvoiceUrl             Paddle-issued invoice PDF (merchant of record: Paddle's invoice)
@@ -12,21 +12,40 @@
  */
 import type { AddressPreview, CountryCodeSupported, TransactionItemCreate } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";
-import { isTransportFailure, paddleError } from "./errors.js";
+import { paddleError } from "./errors.js";
 import { listAll } from "./pagination.js";
 import type { PaddleStore } from "./store.js";
 
-/** Returns the Paddle customer id for a user, creating or reusing the Paddle customer by email. */
-export async function ensureCustomer(store: PaddleStore, userId: string, email: string, name?: string): Promise<string> {
+/** Thrown when the email already belongs to a Paddle customer and the app has not verified that the user owns it. */
+export class CustomerEmailNotVerifiedError extends Error {
+  constructor() {
+    super("verify your email address before billing can be set up");
+    this.name = "CustomerEmailNotVerifiedError";
+  }
+}
+
+/**
+ * Returns the Paddle customer id for a user, creating the Paddle customer or reusing it by email.
+ * Paddle requires unique customer emails, so an existing customer with this email is the only one
+ * it can have. Reuse it only when the app has verified that the user owns the email; otherwise
+ * anyone who signs up with someone else's address would get that customer's portal and invoices.
+ */
+export async function ensureCustomer(
+  store: PaddleStore,
+  userId: string,
+  email: string,
+  options: { emailVerified: boolean; name?: string },
+): Promise<string> {
   const known = await store.getCustomerIdForUser(userId);
   if (known) return known;
 
   const client = getPaddleClient();
-  // Paddle requires unique customer emails: reuse an existing customer rather than failing with customer_already_exists.
   const existing = await client.customers.listCustomers({ email: [email], perPage: 1 });
   let customerId = existing.data[0]?.id;
-  if (!customerId) {
-    const created = await client.customers.createCustomer({ body: { email, name, customData: { user_id: userId } } });
+  if (customerId) {
+    if (!options.emailVerified) throw new CustomerEmailNotVerifiedError();
+  } else {
+    const created = await client.customers.createCustomer({ body: { email, ...(options.name ? { name: options.name } : {}), customData: { user_id: userId } } });
     customerId = created.data.id;
   }
   await store.linkCustomer(userId, customerId, email);
@@ -71,8 +90,15 @@ export async function createCheckoutTransaction(store: PaddleStore, input: Creat
       const existing = await client.transactions.getTransaction({ transactionId: claim.transactionId });
       return { transactionId: existing.data.id, checkoutUrl: existing.data.checkout?.url ?? null, reused: true };
     }
-    // Claimed by a concurrent request that has not finished: tell the caller to retry.
-    throw new Error("checkout for this claim key is being created, retry shortly");
+    // Claimed but not linked: another request is creating it, or an earlier attempt ended with an unknown outcome.
+    if (Date.now() - claim.claimedAt.getTime() < STALE_CLAIM_MS) {
+      throw new Error("checkout for this claim key is being created, retry shortly");
+    }
+    const found = await findClaimedTransaction(input);
+    if (found) return found;
+    // Nothing was created under this key: take the claim again.
+    await store.releaseClaim(input.claimKey);
+    return createCheckoutTransaction(store, input);
   }
 
   const items: TransactionItemCreate[] = input.items.map((i) => ({ priceId: i.priceId, quantity: i.quantity }));
@@ -82,35 +108,50 @@ export async function createCheckoutTransaction(store: PaddleStore, input: Creat
         items,
         customerId: input.customerId,
         customData,
-        discountId: input.discountId,
+        ...(input.discountId ? { discountId: input.discountId } : {}),
       },
     });
     await store.linkClaimedTransaction(input.claimKey, created.data.id);
     return { transactionId: created.data.id, checkoutUrl: created.data.checkout?.url ?? null, reused: false };
   } catch (err) {
-    if (isTransportFailure(err)) {
-      // Unknown outcome: Paddle may have created it. Re-read recent transactions for this customer and match the claim key.
-      const recent = await client.transactions.listTransactions({
-        customerId: [input.customerId],
-        status: ["draft", "ready"],
-        orderBy: "created_at[DESC]",
-        perPage: 30,
-      });
-      const match = recent.data.find((t) => (t.customData as Record<string, unknown> | null)?.["claim_key"] === input.claimKey);
-      if (match) {
-        await store.linkClaimedTransaction(input.claimKey, match.id);
-        return { transactionId: match.id, checkoutUrl: match.checkout?.url ?? null, reused: true };
-      }
-    }
-    // Paddle refused (validation, default payment link missing, ...): release the claim so the user can retry after the fix.
-    await store.releaseClaim(input.claimKey);
     const info = paddleError(err);
-    if (info?.code === "transaction_default_checkout_url_not_set") {
-      throw new Error("Paddle: set the default payment link in Paddle > Checkout > Checkout configuration before creating transactions");
+    if (info && info.status >= 400 && info.status < 500) {
+      // Paddle refused (validation, default payment link missing, rate limit, ...): nothing was created.
+      // Release the claim so the user can retry after the fix.
+      await store.releaseClaim(input.claimKey);
+      if (info.code === "transaction_default_checkout_url_not_set") {
+        throw new Error("Paddle: set the default payment link in Paddle > Checkout > Checkout configuration before creating transactions");
+      }
+      throw err;
+    }
+    // Unknown outcome (connection lost, timeout, 5xx, or a 2xx body that could not be read):
+    // Paddle may have created the transaction. Look it up by the claim key; keep the claim if not found,
+    // so a later call with the same key looks again instead of creating a second transaction.
+    try {
+      const found = await findClaimedTransaction(input);
+      if (found) return found;
+    } catch {
+      // lookup failed too: keep the claim
     }
     throw err;
   }
+
+  async function findClaimedTransaction(input: CreateCheckoutInput): Promise<CreateCheckoutResult | undefined> {
+    const recent = await client.transactions.listTransactions({
+      customerId: [input.customerId],
+      status: ["draft", "ready"],
+      orderBy: "created_at[DESC]",
+      perPage: 30,
+    });
+    const match = recent.data.find((t) => t.customData?.["claim_key"] === input.claimKey);
+    if (!match) return undefined;
+    await store.linkClaimedTransaction(input.claimKey, match.id);
+    return { transactionId: match.id, checkoutUrl: match.checkout?.url ?? null, reused: true };
+  }
 }
+
+/** A claim with no transaction after this long is treated as abandoned and looked up again. */
+const STALE_CLAIM_MS = 2 * 60_000;
 
 /** Customer portal links. Create a new session each time; the URLs are temporary and must not be stored or iframed. */
 export async function createPortalSession(customerId: string, subscriptionIds: string[] = []) {

@@ -4,8 +4,7 @@
  * - SERVER ONLY. Never import this file from browser code. The API key it
  *   holds can create charges and refunds. Paddle also blocks API calls made
  *   from browsers; the browser uses a client-side token with Paddle.js instead.
- * - Built once and reused. Resources on the client are memoized getters, so
- *   rebuilding the client per request throws that away.
+ * - Built once and reused. Client lifetime → typescript-client-initialization.
  * - The environment is explicit: the base URL comes from loadPaddleConfig(),
  *   which derives it from PADDLE_ENV and refuses a key that does not match.
  */

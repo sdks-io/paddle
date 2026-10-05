@@ -16,7 +16,7 @@
  *           "billingCycle": { "interval": "year", "frequency": 1 } }
  *       ] },
  *     { "key": "credits-100", "name": "100 credits", "taxCategory": "standard",
- *       "prices": [ { "key": "credits-100", "description": "100 credits", "amount": "1000", "currencyCode": "USD", "billingCycle": null } ] }
+ *       "prices": [ { "key": "credits-100-once", "description": "100 credits", "amount": "1000", "currencyCode": "USD", "billingCycle": null } ] }
  *   ]
  * }
  *
@@ -24,8 +24,8 @@
  * them by that key and updates instead of duplicating. Paddle cannot delete
  * catalog entities, so duplicates would be permanent clutter.
  *
- * Output: prints a JSON map { "<key>": "pri_..." | "pro_..." } and writes it to
- * paddle-catalog.ids.json. Store the price ids in plan_catalog (or env vars).
+ * Output: prints { "products": { "<key>": "pro_..." }, "prices": { "<key>": "pri_..." } }
+ * and writes it to paddle-catalog.ids.json. Store the price ids in plan_catalog (or env vars).
  * Exits non-zero on any failure.
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -67,7 +67,8 @@ async function main(): Promise<void> {
   const seedKey = (customData: Record<string, unknown> | null | undefined) =>
     typeof customData?.["seed_key"] === "string" ? (customData["seed_key"] as string) : undefined;
 
-  const ids: Record<string, string> = {};
+  // Products and prices keep separate maps, so a product and a price may share a key.
+  const ids: { products: Record<string, string>; prices: Record<string, string> } = { products: {}, prices: {} };
 
   for (const p of catalog.products) {
     let product = existingProducts.find((e) => seedKey(e.customData) === p.key);
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
       product = created.data;
       console.error(`+ product ${p.key} ${product.id}`);
     }
-    ids[p.key] = product.id;
+    ids.products[p.key] = product.id;
 
     for (const pr of p.prices) {
       const found = existingPrices.find((e) => seedKey(e.customData) === pr.key && e.productId === product!.id);
@@ -105,7 +106,7 @@ async function main(): Promise<void> {
             status: "active",
           },
         });
-        ids[pr.key] = updated.data.id;
+        ids.prices[pr.key] = updated.data.id;
         console.error(`  = price ${pr.key} ${updated.data.id} (updated)`);
       } else {
         const created = await client.prices.createPrice({
@@ -121,7 +122,7 @@ async function main(): Promise<void> {
             customData: { seed_key: pr.key },
           },
         });
-        ids[pr.key] = created.data.id;
+        ids.prices[pr.key] = created.data.id;
         console.error(`  + price ${pr.key} ${created.data.id}`);
       }
     }

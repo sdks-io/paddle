@@ -5,8 +5,8 @@
  *
  * The mirror in the database is NOT written here. Paddle sends
  * subscription.updated after each change and the webhook handler updates the
- * row; the UI should re-read the entitlement after the webhook lands (poll or
- * push), not assume the change from the API response.
+ * row; the UI should re-read the entitlement after the webhook has been processed
+ * (poll or push), not assume the change from the API response.
  *
  * Paddle rules that apply (see recipes for the full list):
  * - Changing items or next_billed_at requires proration_billing_mode.
@@ -16,7 +16,7 @@
  * - Cancel defaults to the end of the period (scheduled_change); immediate cancel does not refund.
  * - Canceled subscriptions cannot be reinstated; the customer buys again.
  */
-import type { ProrationBillingMode, SubscriptionUpdateItems, SubscriptionChargeItems } from "paddle-apimatic-sdk";
+import type { PriceWithProductCollectionIncludes, ProrationBillingMode, SubscriptionStatus, SubscriptionUpdateItems, SubscriptionChargeItems } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";
 
 /** Current subscription from Paddle, with the next transaction (upcoming renewal) and recurring totals. */
@@ -37,7 +37,8 @@ export async function getSubscriptionWithNext(subscriptionId: string) {
  *  - "prorated_next_billing_period": apply now, settle the difference on the next invoice (typical downgrade).
  *  - "full_immediately" / "full_next_billing_period": no proration, full new price.
  *  - "do_not_bill": change items without charging (required while trialing or paused).
- * Credits that exceed the charge land on the customer's credit balance and are used on future invoices.
+ * Credits that exceed the charge are added to the customer's credit balance and are used on future invoices.
+ * For a change the customer asked for, take `mode` from chooseProrationMode, never from the request.
  */
 export async function changePlan(
   subscriptionId: string,
@@ -59,6 +60,31 @@ export async function changePlan(
   }
   const updated = await client.subscriptions.updateSubscription({ subscriptionId, body });
   return { subscription: updated.data };
+}
+
+/**
+ * Proration mode for a plan or seat change the customer asked for, decided on the server
+ * (recipe 04, "Choosing mode"). Never accept the mode from the browser: "do_not_bill" would make
+ * an upgrade free. A free change as goodwill is the owner's decision; call changePlan directly for it.
+ */
+export async function chooseProrationMode(
+  current: { status: SubscriptionStatus; priceId: string; quantity: number },
+  target: { priceId: string; quantity: number },
+): Promise<ProrationBillingMode> {
+  // The only mode Paddle allows while trialing or paused.
+  if (current.status === "trialing" || current.status === "paused") return "do_not_bill";
+  const client = getPaddleClient();
+  const [from, to] = await Promise.all([
+    client.prices.getPrice({ priceId: current.priceId }),
+    client.prices.getPrice({ priceId: target.priceId }),
+  ]);
+  const cycle = (p: PriceWithProductCollectionIncludes) => (p.billingCycle ? `${p.billingCycle.interval}:${p.billingCycle.frequency}` : "none");
+  // A change of billing frequency allows only prorated_immediately, full_immediately or do_not_bill.
+  if (cycle(from.data) !== cycle(to.data)) return "prorated_immediately";
+  if (from.data.unitPrice.currencyCode !== to.data.unitPrice.currencyCode) return "prorated_immediately";
+  const total = (p: PriceWithProductCollectionIncludes, quantity: number) => BigInt(p.unitPrice.amount) * BigInt(quantity);
+  // Upgrade: charge the difference now. Downgrade: switch now, credit the difference on the next invoice.
+  return total(to.data, target.quantity) >= total(from.data, current.quantity) ? "prorated_immediately" : "prorated_next_billing_period";
 }
 
 /** Seats: same price, new quantity. The price's quantity.minimum/maximum bound what Paddle accepts. */

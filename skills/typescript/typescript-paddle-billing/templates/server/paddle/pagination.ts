@@ -3,16 +3,16 @@
  *
  * Paddle lists are cursor-based: `meta.pagination.next` is the full URL of the
  * next page (it carries `after=<last id>`), and `meta.pagination.has_more`
- * says whether to continue. The SDK exposes them as
- * `meta.pagination.next` / `meta.pagination.hasMore`; it does not auto-page.
+ * says whether to continue. On SDK responses they are
+ * `meta.pagination.next` / `meta.pagination.hasMore` (`PaginatedMeta`).
  *
  * Per-page limits (Paddle docs): most lists default 50, max 200;
- * GET /transactions max 30; GET /adjustments max 50.
+ * listTransactions max 30; listAdjustments max 50.
  */
+import type { PaginatedMeta } from "paddle-apimatic-sdk";
 
-interface PageMeta {
-  pagination: { next: string; hasMore: boolean };
-}
+/** The part of PaginatedMeta the cursor needs. */
+type PageMeta = Pick<PaginatedMeta, "pagination">;
 
 /** Extracts the `after` cursor from `meta.pagination.next`, or undefined when there is no next page. */
 export function nextCursor(meta: PageMeta): string | undefined {

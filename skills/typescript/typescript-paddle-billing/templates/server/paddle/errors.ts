@@ -1,10 +1,9 @@
 /**
- * Reading Paddle errors out of the SDK's error family.
+ * Reading Paddle errors out of the SDK's error family (→ typescript-error-handling).
  *
- * Every operation rejects with its own subclass of ApiError (for example
- * `Subscriptions.UpdateSubscriptionError`). The body Paddle returns is
+ * The body Paddle returns on an error is
  *   { error: { type, code, detail, documentation_url, errors?: [{field, message}] }, meta: { request_id } }
- * and the SDK decodes it (camelCase) into payload.kind === "errorResponse".
+ * and arrives as the `ErrorResponse` model.
  *
  * Use `paddleError(err)` in a catch to get status, code, detail and request_id
  * without caring which operation threw. Narrow on `code` (a stable string
@@ -47,16 +46,18 @@ export function isTransportFailure(err: unknown): boolean {
   return err instanceof PaddleApiError && (err.kind === "connection" || err.kind === "timeout");
 }
 
-/** True when Paddle answered 429. The SDK already retried GETs; writes reach here. */
+/** True when Paddle answered 429. Retry settings → typescript-configuration-resilience. */
 export function isRateLimited(err: unknown): boolean {
   return err instanceof ApiError && err.status === 429;
 }
 
 /**
- * Map a Paddle failure to the HTTP answer your own API should give.
- * - Validation and state errors (4xx other than 401/403/429): pass the status
- *   and Paddle's `detail` through, so the caller learns what to change.
- * - 401/403: your key is wrong or lacks a permission → 502 with a fixed message.
+ * Map a Paddle failure to the HTTP answer your own API should give. Messages are
+ * fixed; Paddle's `detail` and field errors are for logs and operators, so log
+ * them with `requestId` (`paddleError(err)`) before answering.
+ * - Validation and state errors (4xx other than 401/403/429): the status and
+ *   Paddle's `code`, so the frontend can show its own message for that code.
+ * - 401/403: your key is wrong or lacks a permission → 502.
  * - 429 → 503; 5xx or transport → 502.
  */
 export function toHttpAnswer(err: unknown): { status: number; body: { error: string; code?: string; requestId?: string } } {
@@ -75,5 +76,5 @@ export function toHttpAnswer(err: unknown): { status: number; body: { error: str
   if (info.status >= 500) {
     return { status: 502, body: { error: "Payment provider error", code: info.code, requestId: info.requestId } };
   }
-  return { status: info.status, body: { error: info.detail ?? "Request rejected by payment provider", code: info.code, requestId: info.requestId } };
+  return { status: info.status, body: { error: "Request rejected by payment provider", code: info.code, requestId: info.requestId } };
 }

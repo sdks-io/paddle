@@ -7,18 +7,26 @@
  *
  * Mount AFTER the webhook route and after express.json():
  *   app.use("/api/billing", requireAuth, billingRoutes(store));
- * `req.user` is assumed to carry { id, email }; replace with the project's session shape.
+ * `req.user` is assumed to carry { id, email, emailVerified }; replace with the project's
+ * session shape. emailVerified must come from the app's own email verification.
+ *
+ * The browser chooses only WHICH catalog plan it wants. Prices are checked against
+ * plan_catalog, quantities are bounded here, and the proration mode is decided on the server.
  */
 import { Router, type Request, type Response, type NextFunction } from "express";
-import type { ProrationBillingMode } from "paddle-apimatic-sdk";
-import { createCheckoutTransaction, createPortalSession, ensureCustomer, getInvoiceUrl, listCatalog } from "./checkout.js";
+import { createCheckoutTransaction, createPortalSession, CustomerEmailNotVerifiedError, ensureCustomer, getInvoiceUrl, listCatalog } from "./checkout.js";
 import { getPaddleClient } from "./client.js";
 import { getEntitlement, PaywallError } from "./entitlements.js";
-import { toHttpAnswer } from "./errors.js";
+import { paddleError, toHttpAnswer } from "./errors.js";
 import type { PaddleStore } from "./store.js";
-import { cancelSubscription, changePlan, removeScheduledChange } from "./subscriptions.js";
+import { cancelSubscription, changePlan, chooseProrationMode, removeScheduledChange } from "./subscriptions.js";
 
-type AuthedRequest = Request & { user: { id: string; email: string } };
+type AuthedRequest = Request & { user: { id: string; email: string; emailVerified: boolean } };
+
+/** Upper bound for seats or units in one request. Set it from the plan's quantity.maximum. */
+const MAX_QUANTITY = 1000;
+
+class BadRequest extends Error {}
 
 export function billingRoutes(store: PaddleStore): Router {
   const r = Router();
@@ -38,6 +46,21 @@ export function billingRoutes(store: PaddleStore): Router {
     return row;
   }
 
+  /** Accepts only a price that is an active row of plan_catalog. */
+  async function catalogPrice(priceId: unknown): Promise<string> {
+    const plan = typeof priceId === "string" ? await store.getPlanByPriceId(priceId) : undefined;
+    if (!plan || !plan.active) throw new BadRequest("unknown priceId");
+    return plan.priceId;
+  }
+
+  function boundedQuantity(quantity: unknown, fallback: number): number {
+    const q = quantity === undefined ? fallback : quantity;
+    if (typeof q !== "number" || !Number.isInteger(q) || q < 1 || q > MAX_QUANTITY) throw new BadRequest(`quantity must be an integer from 1 to ${MAX_QUANTITY}`);
+    return q;
+  }
+
+  const ensureUserCustomer = (req: AuthedRequest) => ensureCustomer(store, req.user.id, req.user.email, { emailVerified: req.user.emailVerified });
+
   // READ (mirror): what may this user do?
   r.get("/entitlement", wrap(async (req, res) => {
     const ent = await getEntitlement(store, req.user.id);
@@ -52,11 +75,13 @@ export function billingRoutes(store: PaddleStore): Router {
 
   // WRITE (Paddle): server-created transaction for a checkout with fixed items.
   r.post("/checkout", wrap(async (req, res) => {
-    const { priceId, quantity = 1, claimKey } = req.body as { priceId: string; quantity?: number; claimKey: string };
-    if (!priceId || !claimKey) return res.status(400).json({ error: "priceId and claimKey are required" });
-    const customerId = await ensureCustomer(store, req.user.id, req.user.email);
+    const body = req.body as { priceId?: unknown; quantity?: unknown; claimKey?: unknown };
+    if (typeof body.claimKey !== "string" || !body.claimKey) return res.status(400).json({ error: "claimKey is required" });
+    const priceId = await catalogPrice(body.priceId);
+    const quantity = boundedQuantity(body.quantity, 1);
+    const customerId = await ensureUserCustomer(req);
     const result = await createCheckoutTransaction(store, {
-      claimKey: `${req.user.id}:${claimKey}`,
+      claimKey: `${req.user.id}:${body.claimKey}`,
       userId: req.user.id,
       customerId,
       items: [{ priceId, quantity }],
@@ -66,7 +91,7 @@ export function billingRoutes(store: PaddleStore): Router {
 
   // WRITE (Paddle): customer portal session; redirect the browser to overviewUrl.
   r.post("/portal", wrap(async (req, res) => {
-    const customerId = await ensureCustomer(store, req.user.id, req.user.email);
+    const customerId = await ensureUserCustomer(req);
     const subs = await store.listSubscriptionsForUser(req.user.id);
     res.json(await createPortalSession(customerId, subs.map((s) => s.id)));
   }));
@@ -81,12 +106,16 @@ export function billingRoutes(store: PaddleStore): Router {
     return res.redirect(await getInvoiceUrl(txnId));
   }));
 
-  // WRITE (Paddle): plan or seat change, with preview.
+  // WRITE (Paddle): plan or seat change, with preview. Replaces the first item; list add-ons too if the plan has them.
   r.post("/subscription/:subscriptionId/change", wrap(async (req, res) => {
     const row = await ownSubscription(req);
-    const { priceId, quantity, mode = "prorated_immediately", preview = false } = req.body as { priceId: string; quantity?: number; mode?: ProrationBillingMode; preview?: boolean };
-    if (!priceId) return res.status(400).json({ error: "priceId is required" });
-    return res.json(await changePlan(row.id, [{ priceId, quantity }], mode, { preview }));
+    const body = req.body as { priceId?: unknown; quantity?: unknown; preview?: unknown };
+    const priceId = await catalogPrice(body.priceId);
+    const quantity = boundedQuantity(body.quantity, row.quantity);
+    const currentPriceId = row.priceIds[0];
+    if (!currentPriceId) return res.status(409).json({ error: "subscription has no active item" });
+    const mode = await chooseProrationMode({ status: row.status, priceId: currentPriceId, quantity: row.quantity }, { priceId, quantity });
+    return res.json(await changePlan(row.id, [{ priceId, quantity }], mode, { preview: body.preview === true }));
   }));
 
   // WRITE (Paddle): cancel at period end (default) or immediately (ask the user first).
@@ -104,11 +133,16 @@ export function billingRoutes(store: PaddleStore): Router {
     res.json({ status: sub.status, scheduledChange: sub.scheduledChange ?? null });
   }));
 
-  // Error boundary for this router: paywall → 402, Paddle failures → mapped status with Paddle's reason.
+  // Error boundary for this router: paywall → 402, bad input → 400, Paddle failures → mapped status (errors.ts).
   r.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof PaywallError) return res.status(402).json({ error: err.message, requiredTier: err.requiredTier });
+    if (err instanceof BadRequest) return res.status(400).json({ error: err.message });
+    if (err instanceof CustomerEmailNotVerifiedError) return res.status(409).json({ error: err.message, code: "email_not_verified" });
     const status = (err as { status?: number }).status;
     if (status === 404) return res.status(404).json({ error: "not found" });
+    // Paddle's detail goes to the log (replace console with the project's logger), never to the browser.
+    const info = paddleError(err);
+    if (info) console.error("paddle request failed", { status: info.status, code: info.code, detail: info.detail, fieldErrors: info.fieldErrors, requestId: info.requestId });
     const answer = toHttpAnswer(err);
     return res.status(answer.status).json(answer.body);
   });

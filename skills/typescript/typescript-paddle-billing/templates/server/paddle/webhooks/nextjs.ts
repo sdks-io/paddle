@@ -13,7 +13,13 @@ export function createPaddleWebhookRoute(getHandler: () => PaddleWebhookHandler)
     const rawBody = await req.text();
     const signature = req.headers.get("paddle-signature");
     const handler = getHandler();
-    const result = await handler.receive(rawBody, signature);
+    let result: Awaited<ReturnType<PaddleWebhookHandler["receive"]>>;
+    try {
+      result = await handler.receive(rawBody, signature);
+    } catch {
+      // The store could not record the event: a 500 makes Paddle retry.
+      return Response.json({ error: "could not record the event" }, { status: 500 });
+    }
     if (result.status !== 200) {
       return Response.json({ error: result.error }, { status: result.status });
     }
@@ -22,7 +28,7 @@ export function createPaddleWebhookRoute(getHandler: () => PaddleWebhookHandler)
     // (e.g. a durable job) before returning. Do not fire-and-forget in serverless.
     if (!result.duplicate) {
       try {
-        await handler.process(result.envelope);
+        await handler.process(result.payload);
       } catch {
         // handler.process already recorded the error; a 500 makes Paddle retry this event.
         return Response.json({ error: "processing failed" }, { status: 500 });

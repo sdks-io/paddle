@@ -30,7 +30,7 @@ CREATE TABLE paddle_subscriptions (
   next_billed_at              TIMESTAMPTZ,              -- null when a cancel is scheduled (and for cardless trials); check the payload for paused/canceled
   scheduled_change_action     TEXT,                     -- cancel | pause | resume | null
   scheduled_change_effective_at TIMESTAMPTZ,
-  collection_mode             TEXT NOT NULL DEFAULT 'automatic',
+  collection_mode             TEXT,                       -- automatic | manual
   custom_data                 JSONB,
   last_event_occurred_at      TIMESTAMPTZ NOT NULL,     -- occurred_at of the last webhook applied; older events are ignored
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -54,13 +54,14 @@ CREATE TABLE paddle_purchases (
 CREATE INDEX paddle_purchases_user_idx ON paddle_purchases (user_id);
 
 -- Every webhook event once. event_id is Paddle's deduplication key (delivery is at-least-once).
+-- A row with processed_at NULL is new or failed; a redelivery or a scheduled job processes it again.
 CREATE TABLE paddle_webhook_events (
   event_id      TEXT PRIMARY KEY,                       -- evt_...
   event_type    TEXT NOT NULL,                          -- e.g. subscription.updated
   occurred_at   TIMESTAMPTZ NOT NULL,
   received_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  processed_at  TIMESTAMPTZ,                            -- null until the handler finished
-  error         TEXT,                                   -- last processing error, for retries/inspection
+  processed_at  TIMESTAMPTZ,                            -- null until the handler finished without error
+  error         TEXT,                                   -- last processing error; cleared on success
   payload       JSONB NOT NULL
 );
 CREATE INDEX paddle_webhook_events_unprocessed_idx ON paddle_webhook_events (received_at) WHERE processed_at IS NULL;
