@@ -7,15 +7,14 @@ The core (`templates/server/paddle/*`) is framework-free. These notes cover what
 ```ts
 import express from "express";
 import { paddleWebhookRoute } from "./server/paddle/webhooks/express.js";
-import { PaddleWebhookHandler } from "./server/paddle/webhooks/handler.js";
-import { getPaddleConfig } from "./server/paddle/client.js";
+import { createPaddleWebhookHandler } from "./server/paddle/webhooks/setup.js";
 import { PgPaddleStore } from "./server/paddle/store.pg.js";
 import { startReprocessLoop } from "./server/paddle/webhooks/reprocess.js";
 import pg from "pg";
 
 const app = express();
 const store = new PgPaddleStore(new pg.Pool({ connectionString: process.env.DATABASE_URL }));
-const handler = new PaddleWebhookHandler(getPaddleConfig(), store, hooks, (msg, extra) => logger.warn({ ...extra }, msg));
+const handler = createPaddleWebhookHandler(store, (msg, extra) => logger.warn({ ...extra }, msg)); // hooks live in webhooks/setup.ts
 startReprocessLoop(handler, store); // re-runs unprocessed events every 5 minutes (or cron: paddle-jobs.ts reprocess)
 
 // 1. webhook first, raw body

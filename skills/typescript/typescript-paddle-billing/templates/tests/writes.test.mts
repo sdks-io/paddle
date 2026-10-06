@@ -5,6 +5,7 @@
 // project's test runner (typescript-testing).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { PaddleApiClient, ServerEnvironment } from "paddle-apimatic-sdk";
 import { createCheckoutTransaction, checkoutClaimKey } from "../../server/paddle/checkout.js";
 import { createPaddleClient, usePaddleClientForTests } from "../../server/paddle/client.js";
 import type { PaddleConfig } from "../../server/paddle/config.js";
@@ -55,13 +56,24 @@ answer = (method, path) => {
   if (method === "GET" && path === "/transactions/txn_1") return json(200, { data: transaction("txn_1", txnStatus, claimKey), meta });
   return json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
 };
+// the claim is in the store before the request leaves
+let claimSeenInFlight = false;
+const inner = answer;
+answer = (method, path, body) => {
+  if (method === "POST") claimSeenInFlight = store.claims.has(claimKey);
+  return inner(method, path, body);
+};
 const a = await createCheckoutTransaction(store, input);
 const b = await createCheckoutTransaction(store, input);
 assert.equal(a.transactionId, "txn_1");
 assert.equal(b.reused, true);
 assert.equal(posts("/transactions"), 1);
-// the claim's request body carried the reference the re-read searches by
-assert.equal(sent.find((r) => r.method === "POST")?.body?.["custom_data"]?.["claim_key"], claimKey);
+assert.equal(claimSeenInFlight, true);
+// the claim's request body carried the reference the re-read searches by, and no field nothing requires
+const firstPost = sent.find((r) => r.method === "POST")?.body ?? {};
+assert.equal(firstPost["custom_data"]?.["claim_key"], claimKey);
+// (collection_mode is a default the SDK adds itself; defaults the SDK sends need no row)
+assert.deepEqual(Object.keys(firstPost).filter((k) => k !== "collection_mode").sort(), ["custom_data", "customer_id", "items"]);
 
 // 2. once that transaction is paid, the same purchase gets a new transaction
 txnStatus = "completed";
@@ -71,6 +83,18 @@ answer = (method, path) => {
   return json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
 };
 assert.equal((await createCheckoutTransaction(store, input)).transactionId, "txn_2");
+// two buyers clicking at once after the paid checkout: exactly one new transaction
+txnStatus = "completed";
+let n = 2;
+answer = (method, path) => {
+  if (method === "GET" && path.startsWith("/transactions/")) return json(200, { data: transaction(path.split("/")[2]!, "completed", claimKey), meta });
+  if (method === "POST" && path === "/transactions") return json(201, { data: transaction(`txn_new_${++n}`, "ready", claimKey), meta });
+  return json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
+};
+sent.length = 0;
+const both = await Promise.allSettled([createCheckoutTransaction(store, input), createCheckoutTransaction(store, input)]);
+assert.equal(posts("/transactions"), 1);
+assert.equal(both.filter((r) => r.status === "fulfilled").length + both.filter((r) => r.status === "rejected" && r.reason instanceof WriteInProgressError).length, 2);
 
 // 3. connection lost on the create: the write is re-read by its claim key and found
 const key3 = checkoutClaimKey("u3", items);
@@ -120,8 +144,16 @@ const forbidden = toHttpAnswer(await createCheckoutTransaction(store, { ...input
 assert.equal(forbidden.status, 502);
 assert.equal(forbidden.body.fields, undefined);
 
-// 6. a write that never left (our own error before sending) is not re-read and releases the claim
+// 6. a write that never left (the credential could not be obtained) is not re-read and releases the claim
 assert.equal(writeOutcome(new Error("bug")), "not_sent");
+usePaddleClientForTests(config, new PaddleApiClient({ serverEnvironment: ServerEnvironment.Sandbox, fetch: fakeFetch, bearerAuth: async () => { throw new Error("vault unavailable"); } }));
+sent.length = 0;
+const key6 = checkoutClaimKey("u6", items);
+const notSent = await createCheckoutTransaction(store, { ...input, claimKey: key6, userId: "u6" }).catch((e: unknown) => e);
+assert.equal(writeOutcome(notSent), "not_sent");
+assert.equal(sent.length, 0, "no request, no re-read");
+assert.equal(store.claims.has(key6), false);
+usePaddleClientForTests(config, createPaddleClient(config, { fetch: fakeFetch }));
 
 // 7. the same refund asked twice is created once
 const adjustment = (id: string) => ({
@@ -144,7 +176,12 @@ assert.equal(posts("/adjustments"), 1);
 // 8. a one-off charge with the same ref is made once
 // API responses carry management_urls, which webhook payloads leave out.
 const subscription = { ...fixture("sandbox-subscription-created").data, management_urls: { update_payment_method: null, cancel: "https://sandbox-buyer-portal.paddle.com/cancel" } };
-answer = (method, path) => (method === "POST" && path.endsWith("/charge") ? json(200, { data: subscription, meta }) : json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta }));
+answer = (method, path) =>
+  method === "POST" && path.endsWith("/charge")
+    ? json(200, { data: subscription, meta })
+    : method === "GET" && path === `/subscriptions/${subscription.id}`
+      ? json(200, { data: subscription, meta })
+      : json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
 sent.length = 0;
 await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "next_billing_period", { ref: "usage:2026-10" });
 const again = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "next_billing_period", { ref: "usage:2026-10" });

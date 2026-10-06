@@ -12,7 +12,7 @@
  * Creates go through claimedWrite (writes.ts). Signatures verified against paddle-apimatic-sdk
  * 0.0.3 (sdk-map 0.0.3). Re-check map/operations/*.md after an SDK version bump.
  */
-import type { AddressPreview, CountryCodeSupported, TransactionItemCreate } from "paddle-apimatic-sdk";
+import type { AddressPreview, CountryCodeSupported, CurrencyCode, TransactionItemCreate } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";
 import { paddleError } from "./errors.js";
 import { listAll } from "./pagination.js";
@@ -98,12 +98,20 @@ export interface CreateCheckoutInput {
   claimKey: string;
   userId: string;
   customerId: string;
-  /** Catalog prices and quantities. All recurring items must share one billing interval. */
-  items: { priceId: string; quantity: number }[];
+  /**
+   * Catalog prices and quantities, or a custom one-time price for a product listed in plan_catalog
+   * (a quote or a negotiated amount: Paddle creates a hidden price for that product). All recurring
+   * items must share one billing interval.
+   */
+  items: CheckoutItem[];
   /** Copied by Paddle onto the transaction and, for recurring items, onto the subscription. Keep it small and flat. */
   customData?: Record<string, unknown>;
   discountId?: string;
 }
+
+export type CheckoutItem =
+  | { priceId: string; quantity: number }
+  | { customPrice: { description: string; productId: string; amount: string; currencyCode: CurrencyCode }; quantity: number };
 
 export interface CreateCheckoutResult {
   transactionId: string;
@@ -149,7 +157,18 @@ export async function createCheckoutTransaction(store: PaddleStore, input: Creat
       return match ? { id: match.id, value: toResult(match) } : undefined;
     },
     write: async () => {
-      const items: TransactionItemCreate[] = input.items.map((i) => ({ priceId: i.priceId, quantity: i.quantity }));
+      const items: TransactionItemCreate[] = input.items.map((i) =>
+        "priceId" in i
+          ? { priceId: i.priceId, quantity: i.quantity }
+          : {
+              quantity: i.quantity,
+              price: {
+                description: i.customPrice.description,
+                productId: i.customPrice.productId,
+                unitPrice: { amount: i.customPrice.amount, currencyCode: i.customPrice.currencyCode },
+              },
+            },
+      );
       try {
         const created = await client.transactions.createTransaction({
           body: { items, customerId: input.customerId, customData, ...(input.discountId ? { discountId: input.discountId } : {}) },

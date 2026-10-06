@@ -88,16 +88,18 @@ CREATE INDEX IF NOT EXISTS paddle_webhook_events_pending_idx ON paddle_webhook_e
 -- writing twice. Insert BEFORE the SDK call; store the created id after; delete it when Paddle
 -- refused the write. A unique violation on insert means "another caller has this write".
 -- Key conventions (one per kind, computed on the server, never taken from the browser):
---   transaction  checkout:<user>:<price>:<quantity>    (reused only while the transaction is open)
+--   transaction  checkout:<user>:<price>x<qty>[,...]    (checkoutClaimKey; reused only while the transaction is open)
 --   transaction  trial:<user>:<price>                  (cardless trial)
 --   customer     customer:<user>
---   refund       refund:<txn>:<line ids or 'full'>
---   credit       credit:<txn>:<line ids or 'full'>
+--   transaction  quote:<quote id>                       (custom price for a catalog product)
+--   refund       refund:<txn>:<'full' or line=amount list>
+--   credit       credit:<txn>:<'full' or line=amount list>
 --   charge       charge:<sub>:<usage period or order id>
---   destination  destination:<url>
+--   discount     goodwill:<sub>:<ref>                     (one-cycle goodwill discount)
+-- (webhook destinations are not claimed: Paddle allows one per URL, so paddle-setup.ts lists, then creates)
 CREATE TABLE IF NOT EXISTS paddle_write_claims (
   claim_key   TEXT PRIMARY KEY,
-  kind        TEXT NOT NULL,                            -- transaction | customer | refund | credit | charge | destination
+  kind        TEXT NOT NULL,                            -- transaction | customer | refund | credit | charge | discount | destination
   user_id     TEXT,
   result_id   TEXT,                                     -- txn_ / ctm_ / adj_ / ntfset_ / sub_ once known
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()

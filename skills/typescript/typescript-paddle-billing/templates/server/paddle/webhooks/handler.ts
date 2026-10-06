@@ -25,6 +25,7 @@
  *
  * Payloads are decoded with the SDK's webhook models (see types.ts).
  */
+import { getPaddleClient } from "../client.js";
 import type { PaddleConfig } from "../config.js";
 import type { EventFinalState, PaddleStore, PurchaseItem, PurchaseRow, SubscriptionRow } from "../store.js";
 import { decodeEnvelope, decodeEvent, type AdjustmentEvent, type DecodedEvent, type SubscriptionEvent, type WebhookAdjustment, type WebhookTransaction } from "./types.js";
@@ -40,16 +41,20 @@ export interface WebhookHooks {
    */
   onPurchaseCompleted?(purchase: PurchaseRow, tx: WebhookTransaction): Promise<void>;
   /**
-   * Called when an approved refund or a chargeback covered purchased lines; the lines are already
-   * marked refunded (hasPurchased turns false for them). Revoke what they gave, e.g. a negative
-   * credit entry with ref = adjustment.id.
+   * Called when an approved refund of whole lines (item type "full", or a full adjustment) or a
+   * chargeback covered purchased lines; the lines are already marked refunded (hasPurchased turns
+   * false for them). Revoke what they gave, e.g. a negative credit entry with ref = adjustment.id.
+   * A refund of part of a line's amount leaves the line in place; handle it in onAdjustment if the app pro-rates.
    */
   onPurchaseRefunded?(purchase: PurchaseRow, refundedItems: PurchaseItem[], adjustment: WebhookAdjustment): Promise<void>;
   /** Every refund, credit and chargeback event that concerns this app (any status), after the built-in handling. */
   onAdjustment?(event: AdjustmentEvent): Promise<void>;
   /** Payment failed (checkout or renewal); show a banner, email the customer. */
   onPaymentFailed?(tx: WebhookTransaction): Promise<void>;
-  /** A completed transaction that belongs to a subscription (renewal, plan change, one-off charge). Check `tx.origin`, e.g. "subscription_charge" for overage. Access is not decided here. */
+  /**
+   * A completed transaction that belongs to a subscription: the first checkout (origin "web"), renewals,
+   * plan changes and one-off charges. Check `tx.origin`, e.g. "subscription_charge" for overage. Access is not decided here.
+   */
   onSubscriptionTransactionCompleted?(tx: WebhookTransaction): Promise<void>;
   /** An event that needs a person: "undecodable" (body does not match the SDK model) or "gave_up" (retries exhausted). Alert the owner. */
   onEventNeedsAttention?(info: { eventId: string; eventType: string; state: EventFinalState; error: string }): Promise<void>;
@@ -62,13 +67,29 @@ export type ReceiveResult =
 /** What process() did: applied, ignored (another app's event, or nothing to do), or parked as undecodable. */
 export type ProcessResult = "applied" | "ignored" | "undecodable";
 
+export interface HandlerOptions {
+  /**
+   * Reads a transaction's prices and products from Paddle. Used when a refund or chargeback arrives
+   * before the purchase it concerns. Defaults to the SDK client; tests pass a stub.
+   */
+  lookupTransaction?: (transactionId: string) => Promise<{ priceId: string; productId: string }[]>;
+}
+
 export class PaddleWebhookHandler {
+  private readonly lookupTransaction: NonNullable<HandlerOptions["lookupTransaction"]>;
+
   constructor(
     private readonly config: PaddleConfig,
     private readonly store: PaddleStore,
     private readonly hooks: WebhookHooks = {},
     private readonly log: (msg: string, extra?: Record<string, unknown>) => void = () => {},
-  ) {}
+    options: HandlerOptions = {},
+  ) {
+    this.lookupTransaction =
+      options.lookupTransaction ??
+      (async (transactionId) =>
+        (await getPaddleClient().transactions.getTransaction({ transactionId })).data.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId })));
+  }
 
   /**
    * Step 1 — call from the HTTP route. Returns the status to answer with (see express.ts / nextjs.ts).
@@ -196,13 +217,14 @@ export class PaddleWebhookHandler {
     if (!linkedUser) await this.store.linkCustomer(userId, customerId, null);
   }
 
-  private async isCatalogPrice(priceId: string): Promise<boolean> {
-    return (await this.store.getPlanByPriceId(priceId)) !== undefined;
+  /** A price this app sells: listed in plan_catalog, or a custom price of a listed product (quotes, inline prices). */
+  private async isCatalogItem(price: { id: string; productId: string }): Promise<boolean> {
+    return (await this.store.getPlanByPriceId(price.id)) !== undefined || (await this.store.isCatalogProduct(price.productId));
   }
 
-  /** A transaction concerns this app when one of its prices is in plan_catalog or its subscription is already mirrored. */
+  /** A transaction concerns this app when one of its prices is this app's or its subscription is already mirrored. */
   private async concernsThisApp(tx: WebhookTransaction): Promise<boolean> {
-    for (const item of tx.items) if (await this.isCatalogPrice(item.price.id)) return true;
+    for (const item of tx.items) if (await this.isCatalogItem(item.price)) return true;
     return tx.subscriptionId ? (await this.store.getSubscription(tx.subscriptionId)) !== undefined : false;
   }
 
@@ -211,7 +233,7 @@ export class PaddleWebhookHandler {
     const existing = await this.store.getSubscription(sub.id);
     if (!existing) {
       let ours = false;
-      for (const item of sub.items) if (await this.isCatalogPrice(item.price.id)) ours = true;
+      for (const item of sub.items) if (await this.isCatalogItem(item.price)) ours = true;
       if (!ours) return "ignored: prices not in plan_catalog";
     }
     if (existing && existing.lastEventOccurredAt > event.occurredAt) {
@@ -260,7 +282,7 @@ export class PaddleWebhookHandler {
     const items: PurchaseItem[] = [];
     for (const item of tx.items) {
       if (item.price.billingCycle != null) continue; // recurring: the subscription grants it
-      if (!(await this.isCatalogPrice(item.price.id))) continue;
+      if (!(await this.isCatalogItem(item.price))) continue;
       const line = lines.find((l) => l.priceId === item.price.id && !used.has(l.id));
       if (line) used.add(line.id);
       items.push({ lineItemId: line?.id ?? null, priceId: item.price.id, productId: item.price.productId, quantity: item.quantity, refundedAt: null });
@@ -286,12 +308,28 @@ export class PaddleWebhookHandler {
     const adj = event.data;
     const purchase = await this.store.getPurchase(adj.transactionId);
     const subscription = adj.subscriptionId ? await this.store.getSubscription(adj.subscriptionId) : undefined;
-    if (!purchase && !subscription) return "ignored: transaction not known to this app";
-
     // An approved refund or a chargeback takes back what the lines gave. A reversed chargeback is the owner's call (onAdjustment).
     const takesBack = (adj.action === "refund" && adj.status === "approved") || adj.action === "chargeback";
+    if (!purchase && !subscription) {
+      if (takesBack) {
+        // The purchase may not be recorded yet (its transaction.completed is waiting to be retried):
+        // if the transaction is this app's, fail so the event is retried after the purchase exists.
+        const items = await this.lookupTransaction(adj.transactionId);
+        for (const item of items) {
+          if (await this.isCatalogItem({ id: item.priceId, productId: item.productId })) {
+            throw new Error(`purchase ${adj.transactionId} not recorded yet; retrying the ${adj.action} later`);
+          }
+        }
+      }
+      return "ignored: transaction not known to this app";
+    }
+
     if (purchase && takesBack) {
-      const lineIds = adj.type === "full" || adj.items.length === 0 ? ("all" as const) : adj.items.map((i) => i.itemId);
+      // Whole lines only: a refund of part of a line's amount leaves the line (and what it gave) in place.
+      const lineIds =
+        adj.type === "full" || adj.action === "chargeback" || adj.items.length === 0
+          ? ("all" as const)
+          : adj.items.filter((i) => i.type === "full").map((i) => i.itemId);
       const refunded = await this.store.markPurchaseItemsRefunded(adj.transactionId, lineIds, event.occurredAt);
       if (refunded.length > 0) await this.hooks.onPurchaseRefunded?.((await this.store.getPurchase(adj.transactionId)) ?? purchase, refunded, adj);
     }

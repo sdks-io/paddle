@@ -157,6 +157,8 @@ export function billingRoutes(store: PaddleStore): Router {
     const items = await itemsWithNewBase(row, priceId, quantity);
     const mode = await chooseProrationMode({ status: row.status, priceId: currentPriceId, quantity: row.quantity }, { priceId, quantity });
     const result = await changePlan(row.id, items, mode, { preview: body.preview === true });
+    // A change now replaces any change planned for the renewal; applying the old list later would undo it.
+    if (!result.preview) await store.finishPendingPlanChange(row.id, "canceled", new Date(), "superseded by a change applied now");
     if (result.preview) {
       const totals = (t: { details: { totals: { grandTotal: string; currencyCode: string } } } | null | undefined) =>
         t ? { total: t.details.totals.grandTotal, currency: t.details.totals.currencyCode } : null;

@@ -403,10 +403,16 @@ export async function chargeOneOff(
   // Lines that show this charge was made, on the charge's own transaction or on the next renewal.
   // A catalog item matches by price; an inline item by product (and description where the line carries one).
   type Line = { priceId: string | null; productId: string | null; description?: string };
-  const matches = (lines: Line[]) =>
-    items.every((i) =>
-      lines.some((l) => ("priceId" in i ? l.priceId === i.priceId : l.productId === i.productId && (l.description === undefined || l.description === i.description))),
-    );
+  const isChargeLine = (l: Line) =>
+    items.some((i) => ("priceId" in i ? l.priceId === i.priceId : l.productId === i.productId && (l.description === undefined || l.description === i.description)));
+  const matches = (lines: Line[]) => items.every((i) => lines.some((l) => isChargeLine(l) && ("priceId" in i ? l.priceId === i.priceId : l.productId === i.productId)));
+  const nextLines = async (): Promise<Line[]> => {
+    const next = (await client.subscriptions.getSubscription({ subscriptionId, include: ["next_transaction"] })).data.nextTransaction;
+    return next ? next.details.lineItems.map((l) => ({ priceId: l.priceId ?? null, productId: l.product.id ?? null })) : [];
+  };
+  // Next-period charges join the renewal invoice, where earlier charges for the same price may already sit:
+  // the lookup counts this charge's lines before the write and accepts the charge only when the count grew.
+  let linesBefore: number | undefined;
 
   const { value, reused } = await claimedWrite(store, {
     claimKey: `charge:${subscriptionId}:${options.ref}`,
@@ -414,18 +420,19 @@ export async function chargeOneOff(
     userId: null,
     operation: "createSubscriptionCharge",
     reuse: async (id) => id,
+    absenceIsProof: when === "immediately",
     find: async (since) => {
       if (when === "immediately") {
         const txns = await client.transactions.listTransactions({ subscriptionId: [subscriptionId], origin: ["subscription_charge"], orderBy: "created_at[DESC]", perPage: 30 });
         const hit = txns.data.find((t) => t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))));
         return hit ? { id: subscriptionId, value: subscriptionId } : undefined;
       }
-      const sub = await client.subscriptions.getSubscription({ subscriptionId, include: ["next_transaction"] });
-      const next = sub.data.nextTransaction;
-      const lines = next ? next.details.lineItems.map((l) => ({ priceId: l.priceId ?? null, productId: l.product.id ?? null })) : [];
-      return next && matches(lines) ? { id: subscriptionId, value: subscriptionId } : undefined;
+      if (linesBefore === undefined) return undefined; // nothing to compare with: cannot tell
+      const after = (await nextLines()).filter(isChargeLine).length;
+      return after - linesBefore >= items.length ? { id: subscriptionId, value: subscriptionId } : undefined;
     },
     write: async () => {
+      if (when === "next_billing_period") linesBefore = (await nextLines()).filter(isChargeLine).length;
       const res = await client.subscriptions.createSubscriptionCharge({ subscriptionId, body });
       return { id: res.data.id, value: res.data.id };
     },
@@ -440,7 +447,8 @@ type SubscriptionChargeInlineCurrency = Extract<SubscriptionChargeItems, { price
  * Let the customer update their payment method inside your app: Paddle returns a
  * transaction (zero-value for active subscriptions; the failed one for past_due).
  * Open it with openPaymentMethodCheckout (paddle-browser.ts), which uses the one-page
- * checkout that cardless trials require, or send checkout.url.
+ * checkout that cardless trials require. checkout.url (pay.html) works for other subscriptions;
+ * pay.html opens the default checkout variant, which Paddle refuses for cardless trials.
  * Alternative without code: the customer portal's update-payment-method link.
  */
 export async function getUpdatePaymentMethodTransaction(subscriptionId: string) {

@@ -11,7 +11,7 @@ Paddle constraints that apply to every change: no change within 30 minutes of `n
 Needs: `sub_…`, current items (from the row or `getSubscriptionWithNext`), target `pri_…`. Produces: a new plan, optional immediate transaction.
 
 1. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
-2. Preview so the customer sees the money: `changePlan(subId, [{ priceId: newPriceId, quantity }], mode, { preview: true })`. Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
+2. Preview so the customer sees the money: `changePlan(subId, items, mode, { preview: true })`, where `items` is the complete list with the base plan replaced (`currentItems(subId)`, then swap the base item; `routes.express.ts` does this). Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
 3. Apply with the same arguments without `preview`.
 
 Choosing `mode` (`proration_billing_mode`):
@@ -38,7 +38,7 @@ Needs: `sub_…` (active, no scheduled cancel or pause), target `pri_…` from `
 2. Schedule `paddle-jobs.ts plan-changes` (or `applyDuePlanChanges(store)`) at least every 15 minutes. Between 2 hours and 35 minutes before the renewal it applies the change:
     - same billing cycle (a downgrade): `do_not_bill`; the renewal then bills the new price;
     - different billing cycle (yearly ↔ monthly): `full_immediately`; the new price is charged at once and a new term starts then, at most two hours before the old one would have ended. Those minutes are not credited.
-3. The job cancels the pending change when the subscription is no longer active or has a scheduled cancel or pause, and re-plans it when the renewal date moved (trial extended, date changed).
+3. The job cancels the pending change when the subscription is no longer active or has a scheduled cancel or pause, and re-plans it when the renewal date moved (trial extended, date changed). A plan change applied now (`/change`) cancels the pending one: applying the older list at renewal would undo it.
 4. `subscription.updated` arrives as for any change; the mirror follows.
 
 ## Trials

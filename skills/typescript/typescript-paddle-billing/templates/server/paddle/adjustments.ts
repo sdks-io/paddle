@@ -51,13 +51,15 @@ async function adjust(
     kind: action,
     userId,
     operation: `createAdjustment (${action})`,
+    // A refund Paddle rejected is used up: asking again makes a new one.
     reuse: async (adjustmentId) => {
       const res = await client.adjustments.listAdjustments({ id: [adjustmentId], perPage: 1 });
-      return res.data[0];
+      const existing = res.data[0];
+      return existing && existing.status !== "rejected" ? existing : undefined;
     },
     find: async (since) => {
       const res = await client.adjustments.listAdjustments({ transactionId: [transactionId], action: [action], perPage: 50 });
-      const hit = res.data.find((a) => a.createdAt >= since && a.reason === reason && sameLines(a.items));
+      const hit = res.data.find((a) => a.createdAt >= since && a.status !== "rejected" && a.reason === reason && sameLines(a.items));
       return hit ? { id: hit.id, value: hit } : undefined;
     },
     write: async () => {
@@ -114,9 +116,9 @@ export async function grantGoodwillDiscount(
     if (existing?.code !== code) throw new SubscriptionHasDiscountError(sub.discount.id);
   }
 
-  const { value: discountId } = await claimedWrite(store, {
+  const { value: discountId, reused } = await claimedWrite(store, {
     claimKey,
-    kind: "credit",
+    kind: "discount",
     userId: null,
     operation: "createDiscount (goodwill)",
     reuse: async (id) => id,
@@ -142,12 +144,17 @@ export async function grantGoodwillDiscount(
     },
   });
 
+  if (reused) {
+    // Granted before under this ref: apply it only if it was never used (a crash between the two calls).
+    const discount = (await client.discounts.listDiscounts({ id: [discountId], perPage: 1 })).data[0];
+    if (sub.discount?.id === discountId || (discount?.timesUsed ?? 0) > 0) return { discountId, subscription: sub, alreadyGranted: true };
+  }
   // Setting the same discount again leaves the same state, so this update needs no claim.
   const updated = await client.subscriptions.updateSubscription({
     subscriptionId: input.subscriptionId,
     body: { discount: { id: discountId, effectiveFrom: "next_billing_period" } },
   });
-  return { discountId, subscription: updated.data };
+  return { discountId, subscription: updated.data, alreadyGranted: false };
 }
 
 /** Adjustments for a transaction or subscription (refund history for a billing page). per_page max is 50. */

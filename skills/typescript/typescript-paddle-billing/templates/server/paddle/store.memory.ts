@@ -20,6 +20,8 @@ interface EventRecord {
   eventType: string;
   occurredAt: Date;
   payload: unknown;
+  receivedAt: Date;
+  lastAttemptAt?: Date;
   processedAt?: Date;
   attempts: number;
   finalState?: EventFinalState;
@@ -61,8 +63,12 @@ export class MemoryPaddleStore implements PaddleStore {
 
   async recordEvent(event: { eventId: string; eventType: string; occurredAt: Date; payload: unknown }) {
     const existing = this.events.get(event.eventId);
-    if (existing) return existing.processedAt === undefined; // processed already: duplicate delivery
-    this.events.set(event.eventId, { eventType: event.eventType, occurredAt: event.occurredAt, payload: event.payload, attempts: 0 });
+    if (existing) {
+      if (existing.processedAt !== undefined) return false; // processed already: duplicate delivery
+      existing.receivedAt = new Date();
+      return true;
+    }
+    this.events.set(event.eventId, { eventType: event.eventType, occurredAt: event.occurredAt, payload: event.payload, receivedAt: new Date(), attempts: 0 });
     return true;
   }
   async markEventProcessed(eventId: string, note?: string) {
@@ -77,6 +83,7 @@ export class MemoryPaddleStore implements PaddleStore {
     const e = this.events.get(eventId);
     if (!e) return;
     e.attempts += 1;
+    e.lastAttemptAt = new Date();
     e.error = error;
   }
   async markEventFinal(eventId: string, state: EventFinalState, error: string) {
@@ -85,18 +92,25 @@ export class MemoryPaddleStore implements PaddleStore {
     e.finalState = state;
     e.error = error;
   }
-  async listPendingEvents(options: { maxAttempts: number; limit: number }): Promise<PendingEvent[]> {
-    return [...this.events.entries()]
+  async leasePendingEvents(options: { maxAttempts: number; limit: number; leaseMs: number }): Promise<PendingEvent[]> {
+    const now = Date.now();
+    const leased = [...this.events.entries()]
       .filter(([, e]) => e.processedAt === undefined && e.finalState === undefined && e.attempts < options.maxAttempts)
+      .filter(([, e]) => now - e.receivedAt.getTime() >= options.leaseMs && (!e.lastAttemptAt || now - e.lastAttemptAt.getTime() >= options.leaseMs))
       .sort(([, a], [, b]) => a.occurredAt.getTime() - b.occurredAt.getTime())
-      .slice(0, options.limit)
-      .map(([eventId, e]) => ({ eventId, eventType: e.eventType, payload: e.payload, attempts: e.attempts }));
+      .slice(0, options.limit);
+    for (const [, e] of leased) e.lastAttemptAt = new Date(now);
+    return leased.map(([eventId, e]) => ({ eventId, eventType: e.eventType, payload: e.payload, attempts: e.attempts }));
   }
-  async reopenEvents(state: EventFinalState) {
+  async reopenEvents(state: EventFinalState | "ignored") {
     let n = 0;
     for (const e of this.events.values()) {
-      if (e.processedAt === undefined && e.finalState === state) {
+      const parked = state !== "ignored" && e.processedAt === undefined && e.finalState === state;
+      const ignored = state === "ignored" && e.processedAt !== undefined && (e.error ?? "").startsWith("ignored:");
+      if (parked || ignored) {
         delete e.finalState;
+        delete e.processedAt;
+        delete e.lastAttemptAt;
         e.attempts = 0;
         n++;
       }
@@ -107,7 +121,7 @@ export class MemoryPaddleStore implements PaddleStore {
   async upsertSubscription(row: SubscriptionRow) {
     const existing = this.subscriptions.get(row.id);
     if (existing && existing.lastEventOccurredAt > row.lastEventOccurredAt) return; // older event: ignore
-    this.subscriptions.set(row.id, row);
+    this.subscriptions.set(row.id, { ...row, userId: row.userId ?? existing?.userId ?? null });
   }
   async getSubscription(id: string) {
     return this.subscriptions.get(id);
@@ -120,7 +134,11 @@ export class MemoryPaddleStore implements PaddleStore {
     if (existing && existing.lastEventOccurredAt > row.lastEventOccurredAt) return;
     // Keep refund marks already recorded for the same lines.
     const refunded = new Map((existing?.items ?? []).map((i, idx) => [idx, i.refundedAt]));
-    this.purchases.set(row.transactionId, { ...row, items: row.items.map((i, idx) => ({ ...i, refundedAt: refunded.get(idx) ?? i.refundedAt })) });
+    this.purchases.set(row.transactionId, {
+      ...row,
+      userId: row.userId ?? existing?.userId ?? null,
+      items: row.items.map((i, idx) => ({ ...i, refundedAt: refunded.get(idx) ?? i.refundedAt })),
+    });
   }
   async getPurchase(transactionId: string) {
     return this.purchases.get(transactionId);
@@ -155,9 +173,19 @@ export class MemoryPaddleStore implements PaddleStore {
   async releaseClaim(claimKey: string) {
     this.claims.delete(claimKey);
   }
+  async retakeClaim(claimKey: string, seen: { resultId: string | null; claimedAt: Date }) {
+    const c = this.claims.get(claimKey);
+    if (!c || c.resultId !== seen.resultId || c.claimedAt.getTime() !== seen.claimedAt.getTime()) return false;
+    c.resultId = null;
+    c.claimedAt = new Date(Math.max(Date.now(), seen.claimedAt.getTime() + 1));
+    return true;
+  }
 
   async getPlanByPriceId(priceId: string) {
     return this.plans.get(priceId);
+  }
+  async isCatalogProduct(productId: string) {
+    return [...this.plans.values()].some((p) => p.productId === productId);
   }
   async listPlans() {
     return [...this.plans.values()].filter((p) => p.active).sort((a, b) => a.displayOrder - b.displayOrder);
@@ -184,7 +212,7 @@ export class MemoryPaddleStore implements PaddleStore {
   }
   async finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string) {
     const c = this.planChanges.get(subscriptionId);
-    if (!c) return;
+    if (!c || c.appliedAt !== null || c.canceledAt !== null) return;
     if (outcome === "applied") c.appliedAt = at;
     else c.canceledAt = at;
     c.note = note ?? null;

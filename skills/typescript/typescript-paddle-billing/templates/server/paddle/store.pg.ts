@@ -56,9 +56,11 @@ export class PgPaddleStore implements PaddleStore {
         [userId, paddleCustomerId, email],
       );
     } catch (err) {
+      if (pgCode(err) !== UNIQUE_VIOLATION) throw err;
+      // Two events for the same customer can link the same pair at the same moment; that is not a conflict.
+      if ((await this.getUserIdForCustomer(paddleCustomerId)) === userId) return;
       // UNIQUE(paddle_customer_id): the customer belongs to another user. Never move it.
-      if (pgCode(err) === UNIQUE_VIOLATION) throw new Error(`${paddleCustomerId} is already linked to another user`, { cause: err });
-      throw err;
+      throw new Error(`${paddleCustomerId} is already linked to another user`, { cause: err });
     }
   }
 
@@ -103,14 +105,22 @@ export class PgPaddleStore implements PaddleStore {
     );
   }
 
-  async listPendingEvents(options: { maxAttempts: number; limit: number }): Promise<PendingEvent[]> {
+  async leasePendingEvents(options: { maxAttempts: number; limit: number; leaseMs: number }): Promise<PendingEvent[]> {
+    // One statement: pick due rows nobody else holds, and stamp them so no other caller takes them within the lease.
     const r = await this.pool.query(
-      `SELECT event_id, event_type, payload, attempts FROM paddle_webhook_events
-       WHERE processed_at IS NULL AND final_state IS NULL AND attempts < $1
-       ORDER BY occurred_at ASC LIMIT $2`,
-      [options.maxAttempts, options.limit],
+      `UPDATE paddle_webhook_events SET last_attempt_at = now()
+       WHERE event_id IN (
+         SELECT event_id FROM paddle_webhook_events
+         WHERE processed_at IS NULL AND final_state IS NULL AND attempts < $1
+           AND received_at <= now() - $3 * interval '1 millisecond'
+           AND (last_attempt_at IS NULL OR last_attempt_at <= now() - $3 * interval '1 millisecond')
+         ORDER BY occurred_at ASC LIMIT $2
+         FOR UPDATE SKIP LOCKED)
+       RETURNING event_id, event_type, payload, attempts, occurred_at`,
+      [options.maxAttempts, options.limit, options.leaseMs],
     );
-    return (r.rows as Row[]).map((row) => ({
+    const rows = (r.rows as Row[]).sort((a, b) => (a["occurred_at"] as Date).getTime() - (b["occurred_at"] as Date).getTime());
+    return rows.map((row) => ({
       eventId: row["event_id"] as string,
       eventType: row["event_type"] as string,
       payload: row["payload"],
@@ -118,11 +128,16 @@ export class PgPaddleStore implements PaddleStore {
     }));
   }
 
-  async reopenEvents(state: EventFinalState) {
-    const r = await this.pool.query(
-      "UPDATE paddle_webhook_events SET final_state = NULL, attempts = 0 WHERE final_state = $1 AND processed_at IS NULL",
-      [state],
-    );
+  async reopenEvents(state: EventFinalState | "ignored") {
+    const r =
+      state === "ignored"
+        ? await this.pool.query(
+            "UPDATE paddle_webhook_events SET processed_at = NULL, attempts = 0, last_attempt_at = NULL WHERE processed_at IS NOT NULL AND error LIKE 'ignored:%'",
+          )
+        : await this.pool.query(
+            "UPDATE paddle_webhook_events SET final_state = NULL, attempts = 0, last_attempt_at = NULL WHERE final_state = $1 AND processed_at IS NULL",
+            [state],
+          );
     return r.rowCount ?? 0;
   }
 
@@ -239,12 +254,27 @@ export class PgPaddleStore implements PaddleStore {
     await this.pool.query("DELETE FROM paddle_write_claims WHERE claim_key = $1", [claimKey]);
   }
 
+  async retakeClaim(claimKey: string, seen: { resultId: string | null; claimedAt: Date }) {
+    // Succeeds only while the row is still what the caller saw (timestamps compared to the millisecond the driver returns).
+    const r = await this.pool.query(
+      `UPDATE paddle_write_claims SET result_id = NULL, created_at = GREATEST(clock_timestamp(), created_at + interval '2 milliseconds')
+       WHERE claim_key = $1 AND result_id IS NOT DISTINCT FROM $2 AND abs(extract(epoch FROM created_at - $3::timestamptz)) < 0.001`,
+      [claimKey, seen.resultId, seen.claimedAt],
+    );
+    return r.rowCount === 1;
+  }
+
   // ------------------------------------------------------------- plan catalog
 
   async getPlanByPriceId(priceId: string) {
     const r = await this.pool.query("SELECT * FROM plan_catalog WHERE price_id = $1", [priceId]);
     const row = r.rows[0] as Row | undefined;
     return row ? toPlan(row) : undefined;
+  }
+
+  async isCatalogProduct(productId: string) {
+    const r = await this.pool.query("SELECT 1 FROM plan_catalog WHERE product_id = $1 LIMIT 1", [productId]);
+    return r.rowCount === 1;
   }
 
   async listPlans() {
@@ -299,7 +329,10 @@ export class PgPaddleStore implements PaddleStore {
 
   async finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string) {
     const column = outcome === "applied" ? "applied_at" : "canceled_at";
-    await this.pool.query(`UPDATE paddle_pending_plan_changes SET ${column} = $2, note = $3 WHERE subscription_id = $1`, [subscriptionId, at, note ?? null]);
+    await this.pool.query(
+      `UPDATE paddle_pending_plan_changes SET ${column} = $2, note = $3 WHERE subscription_id = $1 AND applied_at IS NULL AND canceled_at IS NULL`,
+      [subscriptionId, at, note ?? null],
+    );
   }
 
   // ------------------------------------------------------------- helpers

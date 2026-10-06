@@ -35,7 +35,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | `paddle_webhook_events.error` set, `final_state` empty | handler threw (DB down, a hook failed) | the reprocess job retries it; fix the cause if it keeps failing |
 | `final_state = 'gave_up'` | the event failed 10 times | fix the cause, then `paddle-jobs.ts reopen gave_up` |
 | `final_state = 'undecodable'` | the body does not match the SDK's model for its event type | upgrade the SDK (or fix the model), then `paddle-jobs.ts reopen undecodable` |
-| events recorded with error "ignored: prices not in plan_catalog" | another app on the same Paddle account, or a price missing from `plan_catalog` | add the price to `plan_catalog` if the app sells it, then replay the notification |
+| events recorded with error "ignored: prices not in plan_catalog" | another app on the same Paddle account, or a price missing from `plan_catalog` | add the price to `plan_catalog` if the app sells it, then `paddle-jobs.ts reopen ignored` (a replayed notification has the same `event_id` and is skipped as already processed) |
 
 ## Subscriptions and transactions
 
@@ -75,7 +75,7 @@ How the SDK reports transport, decode and configuration failures → `typescript
 
 | They say | Likely cause | Check / answer |
 | --- | --- | --- |
-| "I paid but nothing unlocked" | webhook not received or failed; user not mapped (no `custom_data.user_id`, different email) | `paddle-inspect.ts customer <email>` shows the subscription; `paddle-inspect.ts webhooks` shows delivery; fix mapping, replay the notification; access follows once the webhook is processed |
+| "I paid but nothing unlocked" | webhook not received or failed; price missing from `plan_catalog`; user not mapped (no `custom_data.user_id`, different email) | `paddle-inspect.ts customer <email>` shows the subscription; `paddle-inspect.ts webhooks` shows delivery; check `paddle_webhook_events` for the event and its `error`. Not received: replay the notification. Ignored: add the price, `paddle-jobs.ts reopen ignored`. Unmapped: the row has no user; `ensureCustomer` assigns it at the user's next sign-in |
 | "My card was charged twice" | two transactions created (double click without a claim), or a renewal plus an upgrade proration | `paddle-inspect.ts customer`: two `completed` transactions? refund one (recipe 05); create checkouts through `createCheckoutTransaction` with `checkoutClaimKey` |
 | "The price shows in the wrong currency / with tax added" | `tax_mode`, localization by IP, country override | explain Paddle localizes by location; set overrides or `tax_mode` (recipe 08) |
 | "I cancelled but I'm still being charged" | cancel scheduled for period end and renewal happened before? or portal cancel on a different subscription | check `scheduled_change` and `canceled_at`; refund if the policy says so |

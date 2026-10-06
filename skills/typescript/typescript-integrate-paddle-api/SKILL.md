@@ -109,7 +109,7 @@ Add one table per operation that uses the caller's data — what they typed, IDs
 
 | status | your app answers | the caller reads | test |
 | --- | --- | --- | --- |
-| a `4xx` other than 401 / 403 / 429 | the same `4xx` | the API's reason text from `err.payload` | fake it with a reason; assert the reason is in your response |
+| a `4xx` other than 401 / 403 / 429 | the same `4xx` | the API's reason from `err.payload`: Paddle's error `code` and its field messages (`errors[].field`, `errors[].message`); the free-text `detail` goes to the log | fake it with a code and a field message; assert both are in your response |
 | 401 / 403 | 502 | a fixed message — our credentials | fake a 401; assert 502 and the fixed message |
 | 429 | 503 | a fixed message — our quota | — |
 | 5xx | 502 | a fixed message | — |

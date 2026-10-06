@@ -27,22 +27,31 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   assert.equal(await store.recordEvent(ev), true);
   assert.equal(await store.recordEvent(ev), true);
   await store.markEventFailed("evt_1", "boom");
-  assert.deepEqual((await store.listPendingEvents({ maxAttempts: 5, limit: 10 })).map((e) => [e.eventId, e.attempts]), [["evt_1", 1]]);
-  assert.deepEqual(await store.listPendingEvents({ maxAttempts: 1, limit: 10 }), []); // attempts used up
+  assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).map((e: { eventId: string; attempts: number }) => [e.eventId, e.attempts]), [["evt_1", 1]]);
+  assert.deepEqual(await store.leasePendingEvents({ maxAttempts: 1, limit: 10, leaseMs: 0 }), []); // attempts used up
   await store.markEventProcessed("evt_1");
   assert.equal(await store.recordEvent(ev), false);
-  assert.deepEqual(await store.listPendingEvents({ maxAttempts: 5, limit: 10 }), []);
+  assert.deepEqual(await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 }), []);
 
   // final states park an event until reopened; pending events come oldest first
   for (const [id, at] of [["evt_3", "2026-10-03T00:00:00Z"], ["evt_2", "2026-10-02T00:00:00Z"]] as const) {
     await store.recordEvent({ eventId: id, eventType: "x", occurredAt: t(at), payload: { event_id: id } });
   }
-  assert.deepEqual((await store.listPendingEvents({ maxAttempts: 5, limit: 10 })).map((e) => e.eventId), ["evt_2", "evt_3"]);
+  assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).map((e: { eventId: string; attempts: number }) => e.eventId), ["evt_2", "evt_3"]);
   await store.markEventFinal("evt_2", "undecodable", "bad body");
-  assert.deepEqual((await store.listPendingEvents({ maxAttempts: 5, limit: 10 })).map((e) => e.eventId), ["evt_3"]);
+  assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).map((e: { eventId: string; attempts: number }) => e.eventId), ["evt_3"]);
   assert.equal(await store.reopenEvents("undecodable"), 1);
-  assert.deepEqual((await store.listPendingEvents({ maxAttempts: 5, limit: 10 })).map((e) => e.eventId), ["evt_2", "evt_3"]);
-  assert.deepEqual((await store.listPendingEvents({ maxAttempts: 5, limit: 10 }))[0]?.payload, { event_id: "evt_2" });
+  assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).map((e: { eventId: string; attempts: number }) => e.eventId), ["evt_2", "evt_3"]);
+  assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 }))[0]?.payload, { event_id: "evt_2" });
+  // a lease hides events received or attempted within it, from every caller
+  await store.recordEvent({ eventId: "evt_4", eventType: "x", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} });
+  assert.deepEqual(await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 60_000 }), []);
+  // ignored events can be reopened (e.g. after a price was added to plan_catalog)
+  await store.markEventProcessed("evt_4", "ignored: prices not in plan_catalog");
+  assert.equal(await store.recordEvent({ eventId: "evt_4", eventType: "x", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} }), false);
+  assert.equal(await store.reopenEvents("ignored"), 1);
+  assert.ok((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).some((e: { eventId: string }) => e.eventId === "evt_4"));
+  await store.markEventProcessed("evt_4");
 
   // subscriptions: newer wins
   await store.upsertSubscription(subscription());
@@ -82,6 +91,12 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   await store.linkCustomer("u2", "ctm_2", null);
   assert.equal(await store.assignUserToCustomerRows("u2", "ctm_2"), 1);
   assert.equal((await store.getSubscription("sub_2"))?.userId, "u2");
+  // a later event without a user does not erase the user already resolved
+  await store.upsertSubscription(subscription({ id: "sub_2", userId: null, paddleCustomerId: "ctm_2", lastEventOccurredAt: t("2026-10-03T00:00:00Z") }));
+  assert.equal((await store.getSubscription("sub_2"))?.userId, "u2");
+  // linking the same pair twice (two events at once) is not a conflict
+  await Promise.all([store.linkCustomer("u3", "ctm_3", null), store.linkCustomer("u3", "ctm_3", null)]);
+  assert.equal(await store.getUserIdForCustomer("ctm_3"), "u3");
 
   // claims: the second claim is refused, the result is recorded, a released key can be claimed again
   assert.deepEqual(await store.claimWrite("checkout:u1:pri_1x1", "transaction", "u1"), { claimed: true });
@@ -95,6 +110,15 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   // concurrent claims: exactly one wins
   const racers = await Promise.all([1, 2, 3, 4, 5].map(() => store.claimWrite("refund:txn_1:full", "refund", null)));
   assert.equal(racers.filter((r) => r.claimed).length, 1);
+  // retaking a used-up claim succeeds for exactly one of several callers that saw the same state
+  await store.completeClaim("refund:txn_1:full", "adj_1");
+  const seen = await store.claimWrite("refund:txn_1:full", "refund", null);
+  assert.ok(!seen.claimed);
+  const retakes = await Promise.all([1, 2, 3, 4, 5].map(() => store.retakeClaim("refund:txn_1:full", { resultId: seen.resultId, claimedAt: seen.claimedAt })));
+  assert.equal(retakes.filter(Boolean).length, 1);
+  const after = await store.claimWrite("refund:txn_1:full", "refund", null);
+  assert.equal(!after.claimed && after.resultId, null);
+  assert.equal(await store.retakeClaim("refund:txn_1:full", { resultId: seen.resultId, claimedAt: seen.claimedAt }), false);
 
   // credits: idempotent on (transaction, reason, ref); several lines and refunds each count once
   await store.addCredits({ userId: "u1", delta: 100, reason: "purchase", transactionId: "txn_1", ref: "txnitm_a" });
@@ -106,6 +130,7 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
 
   // plan catalog
   assert.equal(await store.getPlanByPriceId("pri_none"), undefined);
+  assert.equal(await store.isCatalogProduct("pro_none"), false);
 
   // pending plan changes: one open per subscription, due by applyAfter, finished once
   const change = { subscriptionId: "sub_1", userId: "u1", items: [{ priceId: "pri_m", quantity: 1 }], renewalAt: t("2027-01-01T00:00:00Z"), applyAfter: t("2026-12-31T22:00:00Z"), requestedAt: t("2026-10-01T00:00:00Z"), appliedAt: null, canceledAt: null, note: null };
@@ -115,6 +140,8 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   assert.equal((await store.listDuePendingPlanChanges(t("2026-12-31T22:30:00Z"))).length, 1);
   await store.finishPendingPlanChange("sub_1", "applied", t("2026-12-31T22:30:00Z"), "applied with do_not_bill");
   assert.equal(await store.getPendingPlanChange("sub_1"), undefined);
+  await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "too late"); // no effect on an applied change
+  assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
 
   console.log(`store contract OK (${name})`);

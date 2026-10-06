@@ -36,8 +36,8 @@ const API_BASE_URLS: Record<PaddleEnvironment, string> = {
   production: "https://api.paddle.com",
 };
 
-function required(name: string): string {
-  const value = process.env[name];
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name];
   if (!value || value.trim() === "") {
     throw new Error(`Paddle config: ${name} is not set`);
   }
@@ -51,7 +51,7 @@ export function loadPaddleConfig(env: NodeJS.ProcessEnv = process.env): PaddleCo
   }
   const environment: PaddleEnvironment = rawEnv;
 
-  const apiKey = required("PADDLE_API_KEY");
+  const apiKey = required(env, "PADDLE_API_KEY");
   // Key format (Paddle docs): pdl_live_apikey_... for live, pdl_sdbx_apikey_... for sandbox.
   const keyIsSandbox = apiKey.startsWith("pdl_sdbx_");
   const keyIsLive = apiKey.startsWith("pdl_live_");

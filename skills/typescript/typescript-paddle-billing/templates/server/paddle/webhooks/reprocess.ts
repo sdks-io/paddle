@@ -10,8 +10,11 @@
  *
  * Events are applied oldest first, so a subscription's history replays in order (the handler
  * also ignores anything older than the stored row). An event that keeps failing is parked as
- * "gave_up" after `maxAttempts` and reported through onEventNeedsAttention. Several instances may
- * run the job at once: the handler's writes are idempotent.
+ * "gave_up" after `maxAttempts` and reported through onEventNeedsAttention. Each event is leased
+ * (store.leasePendingEvents): the job skips events received or attempted in the last `leaseMs`, so
+ * it never runs an event the webhook route is still processing, and two instances never run the
+ * same event. Build the handler with the app's hooks (createPaddleWebhookHandler in setup.ts), so
+ * a re-run sends the same emails and grants the same credits as a live delivery.
  */
 import type { PaddleStore } from "../store.js";
 import type { PaddleWebhookHandler } from "./handler.js";
@@ -21,6 +24,8 @@ export interface ReprocessOptions {
   maxAttempts?: number;
   /** Events per run. Default 100. */
   limit?: number;
+  /** Skip events received or attempted within this time. Default 2 minutes; keep it above the longest processing time. */
+  leaseMs?: number;
 }
 
 export interface ReprocessReport {
@@ -34,7 +39,7 @@ export interface ReprocessReport {
 export async function reprocessPendingEvents(handler: PaddleWebhookHandler, store: PaddleStore, options: ReprocessOptions = {}): Promise<ReprocessReport> {
   const maxAttempts = options.maxAttempts ?? 10;
   const report: ReprocessReport = { applied: 0, ignored: 0, undecodable: 0, failed: 0, gaveUp: 0 };
-  const pending = await store.listPendingEvents({ maxAttempts, limit: options.limit ?? 100 });
+  const pending = await store.leasePendingEvents({ maxAttempts, limit: options.limit ?? 100, leaseMs: options.leaseMs ?? 2 * 60_000 });
   for (const event of pending) {
     try {
       const result = await handler.process(event.payload);

@@ -29,7 +29,7 @@ Live auto-approval happens only when the account is verified, the amount is at m
 
 Needs: the transaction's line items from `client.transactions.getTransaction` (`data.details.lineItems[]`, each with an `id` `txnitm_…` and `totals`). Produces: `adj_…`.
 
-`refundTransaction` with a list of lines calls `client.adjustments.createAdjustment` with one entry per line item, each `type: "partial"` (with an amount) or `type: "full"` (fields: `map/operations/adjustments.md`). The purchase rows keep each line's `lineItemId`.
+`refundTransaction` with a list of lines calls `client.adjustments.createAdjustment` with one entry per line item, each `type: "partial"` (with an amount) or `type: "full"` (fields: `map/operations/adjustments.md`). The purchase rows keep each line's `lineItemId`. When approved, a `full` line is marked refunded (its item is revoked); a `partial` amount leaves the line and what it gave in place — handle it in `onAdjustment` if the app pro-rates (for example a partial credit-pack refund).
 
 ```ts
 await refundTransaction(store, transactionId, "Refund 1 of 3 seats", [{ lineItemId: "txnitm_…", amount: "1900" }]);
@@ -67,7 +67,7 @@ Paddle creates `adjustment.created` with `action: "chargeback"` (and later `char
 
 - Only `completed` transactions can be refunded (`adjustment_transaction_invalid_status_for_refund`).
 - Refund approval can take time on live; show "refund requested" until `approved`.
-- Idempotency: Paddle refuses a second refund only while the first is pending (`adjustment_pending_refund_request`); after approval another call refunds again if any amount remains. `refundTransaction` claims each refund (transaction and scope), and the purchase lines carry `refundedAt`; check it before offering a refund.
+- Idempotency: Paddle refuses a second refund only while the first is pending (`adjustment_pending_refund_request`); after approval another call refunds again if any amount remains. `refundTransaction` claims each refund (transaction and scope; a rejected one can be asked again), and the purchase lines carry `refundedAt`; check it before offering a refund.
 
 ## Done when
 

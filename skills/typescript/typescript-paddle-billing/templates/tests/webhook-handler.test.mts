@@ -56,7 +56,10 @@ const hooks: WebhookHooks = {
     attention.push({ eventId: info.eventId, state: info.state });
   },
 };
-const handler = new PaddleWebhookHandler(config, store, hooks);
+// Paddle lookups the handler makes (a refund that arrives before its purchase) are stubbed: no network.
+const paddleTransactions = new Map<string, { priceId: string; productId: string }[]>();
+const options = { lookupTransaction: async (id: string) => paddleTransactions.get(id) ?? [] };
+const handler = new PaddleWebhookHandler(config, store, hooks, undefined, options);
 
 let counter = 0;
 /** subscription.updated for sub_1 / ctm_1 / user_42 with one seat-based item on pri_pro_m, from a real sandbox delivery. */
@@ -122,7 +125,7 @@ function mixedEvent(opts: { subscriptionId: string; origin: string; userId: stri
   return e;
 }
 
-function adjustmentEvent(opts: { transactionId: string; status: string; action?: string; lineItemIds: string[] | "full" }) {
+function adjustmentEvent(opts: { transactionId: string; status: string; action?: string; lineItemIds: string[] | "full"; itemType?: string }) {
   counter += 1;
   const at = "2026-10-05T10:00:00Z";
   const full = opts.lineItemIds === "full";
@@ -141,7 +144,7 @@ function adjustmentEvent(opts: { transactionId: string; status: string; action?:
       reason: "test",
       currency_code: "USD",
       status: opts.status,
-      items: full ? [] : (opts.lineItemIds as string[]).map((id, i) => ({ id: `adjitm_${counter}_${i}`, item_id: id, type: "full", amount: "1000", totals: { subtotal: "1000", tax: "0", total: "1000" } })),
+      items: full ? [] : (opts.lineItemIds as string[]).map((id, i) => ({ id: `adjitm_${counter}_${i}`, item_id: id, type: opts.itemType ?? "full", amount: "1000", totals: { subtotal: "1000", tax: "0", total: "1000" } })),
       totals: { subtotal: "1000", tax: "0", total: "1000", fee: "0", earnings: "0", currency_code: "USD" },
       created_at: at,
       updated_at: at,
@@ -225,7 +228,7 @@ const flaky = new PaddleWebhookHandler(config, store, {
       throw new Error("database unavailable");
     }
   },
-});
+}, undefined, options);
 const retried = subscriptionEvent("active", "2026-10-04T14:00:00Z", { id: "sub_3" });
 await assert.rejects(deliver(retried, flaky), /database unavailable/);
 const failedRow = store.events.get(retried.event_id)!;
@@ -267,6 +270,7 @@ assert.equal(store.events.has(unsigned.event_id), false);
 
 // 12. another app's events on the same Paddle account are recorded and ignored
 const foreignSub = subscriptionEvent("active", "2026-10-04T18:00:00Z", { id: "sub_other" }, "user_42", "pri_other");
+foreignSub.data.items[0].price.product_id = "pro_other";
 await deliver(foreignSub);
 assert.equal(await store.getSubscription("sub_other"), undefined);
 assert.ok(store.events.get(foreignSub.event_id)!.processedAt);
@@ -279,9 +283,13 @@ assert.equal(await store.getPurchase("txn_other"), undefined);
 await store.upsertSubscription({ ...(await store.getSubscription("sub_1"))!, id: "sub_unlisted", userId: "user_77", priceIds: ["pri_unlisted"], status: "active" });
 assert.equal((await getEntitlement(store, "user_77")).hasAccess, false);
 
-// 14. an approved partial refund revokes only its line; credits come back once; redelivery changes nothing
+// 14. an approved refund of a whole line revokes only that line; credits come back once; redelivery changes nothing
 await deliver(adjustmentEvent({ transactionId: "txn_a", status: "pending_approval", lineItemIds: ["txnitm_txn_a_0"] }));
 assert.equal(await hasPurchased(store, "user_42", "pro_credits"), true);
+// a refund of part of a line's amount leaves the line and its credits in place
+await deliver(adjustmentEvent({ transactionId: "txn_a", status: "approved", lineItemIds: ["txnitm_txn_a_0"], itemType: "partial" }));
+assert.equal(await hasPurchased(store, "user_42", "pro_credits"), true);
+assert.equal(await store.getCreditBalance("user_42"), 200);
 const approved = adjustmentEvent({ transactionId: "txn_a", status: "approved", lineItemIds: ["txnitm_txn_a_0"] });
 await deliver(approved);
 assert.equal(await hasPurchased(store, "user_42", "pro_credits"), false);
@@ -300,6 +308,20 @@ assert.equal(await hasPurchased(store, "user_42", "pro_lifetime"), false);
 const foreignAdj = adjustmentEvent({ transactionId: "txn_unknown", status: "approved", lineItemIds: "full" });
 await deliver(foreignAdj);
 assert.match(store.events.get(foreignAdj.event_id)!.error ?? "", /not known/);
+// a refund that arrives before its purchase is recorded is retried, not dropped
+paddleTransactions.set("txn_late", [{ priceId: "pri_lifetime", productId: "pro_lifetime" }]);
+const early = adjustmentEvent({ transactionId: "txn_late", status: "approved", lineItemIds: "full" });
+await assert.rejects(deliver(early), /not recorded yet/);
+assert.equal(store.events.get(early.event_id)!.processedAt, undefined);
+await deliver(oneTimeEvent("transaction.completed", { id: "txn_late" }));
+assert.equal(await hasPurchased(store, "user_42", "pro_lifetime"), true);
+await deliver(early); // Paddle's retry, now that the purchase exists
+assert.deepEqual((await store.getPurchase("txn_late"))?.items.map((i) => i.refundedAt !== null), [true, true]);
+// a custom price (a quote) for a catalog product is this app's purchase
+const quote = oneTimeEvent("transaction.completed", { id: "txn_quote", prices: ["pri_hidden_quote", "pri_other_x"] });
+quote.data.items[0].price.product_id = "pro_lifetime";
+await deliver(quote);
+assert.deepEqual((await store.getPurchase("txn_quote"))?.items.map((i) => i.productId), ["pro_lifetime"]);
 
 // 15. the reprocess job retries failed events, parks them after maxAttempts, and runs them again once reopened
 let broken15 = true;
@@ -308,20 +330,20 @@ const jobHandler = new PaddleWebhookHandler(config, store, {
   async onSubscriptionChanged() {
     if (broken15) throw new Error("hook bug");
   },
-});
+}, undefined, options);
 const stuck = subscriptionEvent("active", "2026-10-04T19:00:00Z", { id: "sub_7" });
 await assert.rejects(deliver(stuck, jobHandler));
-let report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3 });
+let report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3, leaseMs: 0 });
 assert.equal(report.failed, 1);
-report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3 });
+report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3, leaseMs: 0 });
 assert.equal(report.gaveUp, 1);
 assert.equal(store.events.get(stuck.event_id)!.finalState, "gave_up");
 assert.deepEqual(attention.at(-1), { eventId: stuck.event_id, state: "gave_up" });
-report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3 });
+report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3, leaseMs: 0 });
 assert.equal(report.failed + report.applied, 0); // parked: not retried
 broken15 = false;
 assert.equal(await store.reopenEvents("gave_up"), 1);
-report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3 });
+report = await reprocessPendingEvents(jobHandler, store, { maxAttempts: 3, leaseMs: 0 });
 assert.equal(report.applied, 1);
 assert.ok(store.events.get(stuck.event_id)!.processedAt);
 

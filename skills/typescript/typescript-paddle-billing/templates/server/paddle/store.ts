@@ -13,12 +13,19 @@
  *     RETURNING event_id;          -- a returned row means "process it"
  * - `markEventFailed` counts the attempt and records the error; processed_at stays NULL, so the
  *   reprocess job (webhooks/reprocess.ts) or a redelivery processes the event again.
+ * - `leasePendingEvents` hands an event to one caller at a time: it skips events received or
+ *   attempted within the lease, and marks the ones it returns as attempted now (in SQL with
+ *   FOR UPDATE SKIP LOCKED), so the job never runs an event the webhook route is still processing
+ *   and two job instances never run the same one.
  * - `markEventFinal` parks an event the job must not retry: "undecodable" (the body does not
  *   match the SDK model) or "gave_up" (attempts exhausted). `reopenEvents` puts them back,
- *   for example after an SDK upgrade or a fix.
+ *   for example after an SDK upgrade or a fix; `reopenEvents("ignored")` reopens events that were
+ *   processed but ignored (error starting "ignored:"), for example after a price was added to plan_catalog.
  * - `upsertSubscription` / `upsertPurchase` must ignore the write when the row already holds a
  *   newer `lastEventOccurredAt` (webhooks arrive out of order).
- * - `claimWrite` must rely on a UNIQUE constraint, not a read-then-write.
+ * - `claimWrite` must rely on a UNIQUE constraint, not a read-then-write. `retakeClaim` must be one
+ *   conditional statement that succeeds for exactly one caller: it resets the claim only when it
+ *   still holds the result and time the caller saw.
  * - `linkCustomer` must keep one user per Paddle customer (UNIQUE on paddle_customer_id) and
  *   throw rather than move a customer to another user.
  * - `addCredits` must be idempotent on (transactionId, reason, ref).
@@ -106,7 +113,7 @@ export interface PendingEvent {
 }
 
 /** Kinds of provider writes guarded by a claim (writes.ts). */
-export type WriteKind = "transaction" | "customer" | "refund" | "credit" | "charge" | "destination";
+export type WriteKind = "transaction" | "customer" | "refund" | "credit" | "charge" | "discount" | "destination";
 
 export type ClaimResult = { claimed: true } | { claimed: false; resultId: string | null; claimedAt: Date };
 
@@ -128,10 +135,13 @@ export interface PaddleStore {
   markEventFailed(eventId: string, error: string): Promise<void>;
   /** Parks the event: the reprocess job skips it until reopenEvents. */
   markEventFinal(eventId: string, state: EventFinalState, error: string): Promise<void>;
-  /** Unprocessed, not parked, fewer than maxAttempts attempts; oldest occurred_at first. */
-  listPendingEvents(options: { maxAttempts: number; limit: number }): Promise<PendingEvent[]>;
-  /** Clears the final state and the attempt count of every event parked in `state`. Returns how many. */
-  reopenEvents(state: EventFinalState): Promise<number>;
+  /**
+   * Unprocessed, not parked, fewer than maxAttempts attempts, not received or attempted within the
+   * last leaseMs; oldest occurred_at first. Marks the returned events as attempted now (the lease).
+   */
+  leasePendingEvents(options: { maxAttempts: number; limit: number; leaseMs: number }): Promise<PendingEvent[]>;
+  /** Puts back every event parked in `state` (or processed but "ignored"): clears the state and the attempt count. Returns how many. */
+  reopenEvents(state: EventFinalState | "ignored"): Promise<number>;
 
   // mirrors
   upsertSubscription(row: SubscriptionRow): Promise<void>;
@@ -150,9 +160,16 @@ export interface PaddleStore {
   completeClaim(claimKey: string, resultId: string): Promise<void>;
   /** Delete the claim: Paddle refused the write or it was never sent, so a later attempt may write. */
   releaseClaim(claimKey: string): Promise<void>;
+  /**
+   * Take over a claim whose result is used up or whose writer gave up: resets it (no result, claimed now)
+   * only if it still holds `seen`. Returns true for the one caller that may now write.
+   */
+  retakeClaim(claimKey: string, seen: { resultId: string | null; claimedAt: Date }): Promise<boolean>;
 
   // plan catalog (the app's own attributes per price it sells)
   getPlanByPriceId(priceId: string): Promise<PlanCatalogRow | undefined>;
+  /** True when any plan_catalog row (active or not) is for this product: custom prices of a catalog product belong to the app. */
+  isCatalogProduct(productId: string): Promise<boolean>;
   listPlans(): Promise<PlanCatalogRow[]>;
 
   // credits (recipe 03 only)
@@ -167,5 +184,6 @@ export interface PaddleStore {
   getPendingPlanChange(subscriptionId: string): Promise<PendingPlanChange | undefined>;
   /** Open changes whose applyAfter is at or before `dueBefore`. */
   listDuePendingPlanChanges(dueBefore: Date): Promise<PendingPlanChange[]>;
+  /** Closes the open change (no effect on one already applied or canceled). */
   finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string): Promise<void>;
 }

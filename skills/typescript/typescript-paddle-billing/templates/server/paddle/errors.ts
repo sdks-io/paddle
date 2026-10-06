@@ -120,9 +120,10 @@ export function toHttpAnswer(err: unknown): HttpAnswer {
   }
   const info = paddleError(err);
   if (!info) {
-    return isTransportFailure(err)
-      ? { status: 502, body: { error: "Payment provider unreachable" } }
-      : { status: 500, body: { error: "Unexpected error" } };
+    if (isTransportFailure(err)) return { status: 502, body: { error: "Payment provider unreachable" } };
+    // A Paddle answer the SDK could not read (on a read; writes turn it into OutcomeUnknownError).
+    if (err instanceof PaddleApiError && err.kind === "decode") return { status: 502, body: { error: "Payment provider answer could not be read" } };
+    return { status: 500, body: { error: "Unexpected error" } };
   }
   const ids = { ...(info.code ? { code: info.code } : {}), ...(info.requestId ? { requestId: info.requestId } : {}) };
   if (info.status === 401 || info.status === 403) {

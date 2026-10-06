@@ -1,6 +1,7 @@
 /**
  * The claim pattern for provider writes that create something (a transaction, customer, refund,
- * credit, one-off charge, discount or webhook destination).
+ * credit, one-off charge or discount). Webhook destinations are one per URL, so paddle-setup.ts
+ * lists before it creates and needs no claim.
  *
  * Paddle documents no idempotency key: "Before retrying a create, list or get the entity to check
  * whether it already exists." So every create here follows one order:
@@ -12,6 +13,8 @@
  * - The outcome is unknown (connection lost, timeout, 5xx, unreadable 2xx): the write is looked up
  *   by the reference that was sent. Found → recorded and returned. Not found, or the lookup failed
  *   → OutcomeUnknownError, and the claim stays so a repeat cannot write twice.
+ * - A claim whose result is used up, or whose writer gave up and left nothing at Paddle, is taken
+ *   over with store.retakeClaim, which succeeds for exactly one caller.
  * These are the DUPLICATE CLAIMS and UNKNOWN OUTCOMES rows of the routing skill's table 1b.1.
  *
  * Updates that set a state (change items, cancel, pause, remove a scheduled change) are not
@@ -33,6 +36,9 @@ export class WriteInProgressError extends Error {
 /** A claim with no result after this long is looked up again; if Paddle has nothing, it is taken again. */
 export const STALE_CLAIM_MS = 2 * 60_000;
 
+/** Lookups after an unknown outcome search from this long before the claim, so clock differences cannot hide the write. */
+export const LOOKUP_MARGIN_MS = 10 * 60_000;
+
 export interface ClaimedWrite<T> {
   claimKey: string;
   kind: WriteKind;
@@ -44,6 +50,11 @@ export interface ClaimedWrite<T> {
   /** Looks the write up by the reference it carried (custom_data, code, destination, ...), created at or after `since`. */
   find: (since: Date) => Promise<{ id: string; value: T } | undefined>;
   /**
+   * False when `find` cannot prove the write is absent (it can only confirm one it knew how to recognise).
+   * A stale claim that `find` does not settle then stays unknown instead of being written again. Default true.
+   */
+  absenceIsProof?: boolean;
+  /**
    * An earlier write under this key finished with `resultId`. Return the value to reuse it, or
    * undefined when that result is used up (for example a checkout that was paid) so a new write is made.
    */
@@ -54,24 +65,32 @@ export async function claimedWrite<T>(store: PaddleStore, w: ClaimedWrite<T>): P
   for (let round = 0; round < 3; round++) {
     const claim = await store.claimWrite(w.claimKey, w.kind, w.userId);
     if (!claim.claimed) {
+      const seen = { resultId: claim.resultId, claimedAt: claim.claimedAt };
       if (claim.resultId) {
         const value = await w.reuse(claim.resultId);
         if (value !== undefined) return { value, reused: true };
-        await store.releaseClaim(w.claimKey); // used up: the next round claims the key again for a new write
+        // Used up (e.g. the checkout was paid): exactly one caller takes the claim over and writes again.
+        if (await store.retakeClaim(w.claimKey, seen)) return write(new Date(Date.now() - LOOKUP_MARGIN_MS));
         continue;
       }
       // Claimed but no result: another request is writing, or an earlier attempt ended unknown.
       if (Date.now() - claim.claimedAt.getTime() < STALE_CLAIM_MS) throw new WriteInProgressError(w.claimKey);
-      const found = await w.find(claim.claimedAt);
+      const found = await w.find(new Date(claim.claimedAt.getTime() - LOOKUP_MARGIN_MS));
       if (found) {
         await store.completeClaim(w.claimKey, found.id);
         return { value: found.value, reused: true };
       }
-      await store.releaseClaim(w.claimKey); // Paddle has nothing under this reference: take the claim again
+      if (w.absenceIsProof === false) throw new OutcomeUnknownError(w.operation, w.claimKey);
+      // Paddle has nothing under this reference: exactly one caller takes the claim over and writes.
+      if (await store.retakeClaim(w.claimKey, seen)) return write(new Date(claim.claimedAt.getTime() - LOOKUP_MARGIN_MS));
       continue;
     }
+    return write(new Date(Date.now() - LOOKUP_MARGIN_MS));
+  }
+  throw new Error(`claimedWrite: could not settle claim ${w.claimKey}`);
 
-    const since = new Date(Date.now() - 1000);
+  /** The SDK call under a claim this caller holds. */
+  async function write(since: Date): Promise<{ value: T; reused: boolean }> {
     try {
       const created = await w.write();
       await store.completeClaim(w.claimKey, created.id);
@@ -93,5 +112,4 @@ export async function claimedWrite<T>(store: PaddleStore, w: ClaimedWrite<T>): P
       throw new OutcomeUnknownError(w.operation, w.claimKey, { cause: err });
     }
   }
-  throw new Error(`claimedWrite: could not settle claim ${w.claimKey}`);
 }
