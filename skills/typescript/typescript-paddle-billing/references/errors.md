@@ -61,6 +61,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | `adjustment_pending_refund_request` | refund already pending | wait for `adjustment.updated` |
 | `adjustment_amount_above_remaining_allowed` | over the remaining refundable amount | read `details.lineItems[].totals` |
 | `discount_code_conflict`, `discount_usage_limit_exceeded`, `discount_expired` | code state | choose another code / raise limit / new code |
+| `subscription_one_off_discount_not_valid` | a discount with `recur: false` applied to a subscription | use `recur: true` with `maximumRecurringIntervals` (1 for a single period), as `grantGoodwillDiscount` does |
 | `report_not_ready`, `concurrent_report_generation_not_allowed`, `report_creation_limit_exceeded` | report lifecycle | poll; one at a time; 100/day |
 
 ## SDK-level failures (not Paddle answers)

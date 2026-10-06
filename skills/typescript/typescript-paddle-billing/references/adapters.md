@@ -34,6 +34,7 @@ Static `pay.html` at the default payment link path. Map `PaywallError` to 402 in
 
 - Server modules in `lib/paddle/`; the Paddle client is used only in route handlers and server actions, never in client components.
 - Webhook: `app/api/paddle/webhook/route.ts` exporting `POST` from `createPaddleWebhookRoute(() => handler)`. Node runtime (default); do not set `runtime = "edge"`. Serverless functions can be frozen after the response, so the template processes before answering. There is no long-running process for `startReprocessLoop`: schedule `paddle-jobs.ts reprocess` (or a route that calls `reprocessPendingEvents`) with the platform's cron.
+- `next dev` compiles a route on its first request. A webhook that arrives then can be verified only after compiling, past the 5-second signature window, and is refused with `timestamp_out_of_tolerance` (Paddle retries it). Before testing, request the webhook route once (any request; it answers 401) so it is compiled. Do not raise `PADDLE_WEBHOOK_TOLERANCE_SECONDS` in production for this.
 - Entitlement: a route handler `app/api/billing/entitlement/route.ts`, or read `getEntitlement` directly in server components for gating pages.
 - Public env: `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN`, `NEXT_PUBLIC_PADDLE_ENV`. `PaddleCheckoutButton.tsx` is a client component; it starts with `"use client"`, which other React setups ignore.
 - Default payment link page: `app/pay/page.tsx` rendering the Paddle.js script (or the static `pay.html` in `public/`).

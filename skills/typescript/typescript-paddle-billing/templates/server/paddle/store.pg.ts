@@ -5,6 +5,7 @@
  *
  *   import pg from "pg";
  *   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+ *   pool.on("error", (err) => logger.error({ err }, "idle database connection failed")); // without it, node-postgres ends the process
  *   const store = new PgPaddleStore(pool);
  *
  * If the project uses an ORM (Drizzle, Prisma, Kysely), port these statements to it and keep

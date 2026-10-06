@@ -51,7 +51,7 @@ Recipe 04 immediate cancel issues no refund. If the policy is "pro-rata refund o
 Paddle offers no credit for automatically-collected (card) transactions, and the app cannot add to a customer's credit balance: Paddle fills it only from prorations ("You can't add to a credit balance yourself"). Two documented ways remain; offer them to the owner:
 
 - **Money back now:** a partial refund of the subscription's last completed transaction (`refundTransaction` with a line and an amount). The customer gets a credit note.
-- **Less to pay next time:** `grantGoodwillDiscount(store, { subscriptionId, amount: "500", currencyCode: "USD", description: "Sorry for the outage", ref: "ticket-4711" })` creates a flat discount (not usable at checkout, one billing period) and applies it from the next billing period. A subscription holds one discount at a time, so it refuses (`SubscriptionHasDiscountError`) when one is already applied: replacing it would end the customer's existing promotion. Use the refund then. The same `ref` grants once.
+- **Less to pay next time:** `grantGoodwillDiscount(store, { subscriptionId, amount: "500", currencyCode: "USD", description: "Sorry for the outage", ref: "ticket-4711" })` creates a flat discount (not usable at checkout, recurring for one billing period: Paddle refuses a one-off discount on a subscription with `subscription_one_off_discount_not_valid`) and applies it from the next billing period. A subscription holds one discount at a time, so it refuses (`SubscriptionHasDiscountError`) when one is already applied: replacing it would end the customer's existing promotion. Use the refund then. The same `ref` grants once.
 
 Both are owner actions: expose them behind admin authorization only.
 

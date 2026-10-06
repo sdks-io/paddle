@@ -136,7 +136,10 @@ export async function grantGoodwillDiscount(
           currencyCode: input.currencyCode as NonNullable<Parameters<typeof client.discounts.createDiscount>[0]["body"]["currencyCode"]>,
           code,
           enabledForCheckout: false, // never usable at checkout; it exists only for this subscription
-          recur: false, // applies to one billing period
+          // Paddle refuses a one-off (recur: false) discount on a subscription (subscription_one_off_discount_not_valid):
+          // a recurring discount limited to one billing period gives the same single reduction.
+          recur: true,
+          maximumRecurringIntervals: 1,
           customData: { goodwill_ref: claimKey },
         },
       });
