@@ -5,7 +5,7 @@ description: "End-to-end flows for putting Paddle Billing into a Node/TypeScript
 
 # Paddle Billing: integration flows for a Node/TypeScript app
 
-This skill is the use-case layer for Paddle. `typescript-integrate-paddle-api` stays the entry point for any SDK work and its rules (plan file, contract sheet, lookups in the SDK map) still apply. Load `typescript-getting-started` for signatures and the other `typescript-*` skills at the steps they govern. Every SDK call in this skill's templates was type-checked against `paddle-apimatic-sdk` 0.0.3 (sdk-map 0.0.3) with `strict`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax` and `noUncheckedIndexedAccess`, and webhook payloads are decoded with that SDK's webhook models; after a version bump, re-check the names in `map/operations/*.md` before trusting a template.
+This skill is the use-case layer for Paddle. `typescript-integrate-paddle-api` stays the entry point for any SDK work and its rules (plan file, contract sheet, lookups in the SDK map) still apply. Load `typescript-getting-started` for signatures and the other `typescript-*` skills at the steps they govern. Every SDK call in this skill's templates was type-checked against `paddle-apimatic-sdk` 0.0.4 (sdk-map 0.0.4) with `strict`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax` and `noUncheckedIndexedAccess`, and webhook payloads are decoded with that SDK's webhook models; after a version bump, re-check the names in `map/operations/*.md` before trusting a template.
 
 Paddle Billing only. Paddle Classic (vendor IDs, `vendors.paddle.com/api/2.0`) is a different product and is not covered.
 
@@ -96,7 +96,7 @@ Purchase → access: the browser opens a checkout for a price → Paddle creates
 Install, in the package that runs the server (for a monorepo: the API server package, not the root):
 
 ```bash
-npm install paddle-apimatic-sdk@^0.0.3   # server: Paddle API and webhook models
+npm install paddle-apimatic-sdk@^0.0.4   # server: Paddle API and webhook models
 npm install pg && npm install -D @types/pg   # server: store.pg.ts (skip if the project's ORM implements PaddleStore)
 npm install @paddle/paddle-js            # browser: Paddle.js loader with types (frontend package in a monorepo)
 npm install -D tsx                       # to run the scripts in scripts/paddle/

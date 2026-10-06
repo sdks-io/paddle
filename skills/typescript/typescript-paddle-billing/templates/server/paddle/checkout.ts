@@ -10,7 +10,7 @@
  *   previewLocalizedPrices    tax-inclusive, localized amounts for a pricing page
  *
  * Creates go through claimedWrite (writes.ts). Signatures verified against paddle-apimatic-sdk
- * 0.0.3 (sdk-map 0.0.3). Re-check map/operations/*.md after an SDK version bump.
+ * 0.0.4 (sdk-map 0.0.4). Re-check map/operations/*.md after an SDK version bump.
  */
 import type { AddressPreview, CountryCodeSupported, CurrencyCode, TransactionItemCreate } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";

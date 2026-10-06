@@ -13,7 +13,7 @@ This is the **SDK-specific** entry point. For general patterns that apply to any
 
 ## SDK identity
 
-Verified against `package.json` and `sdk-map.md` of the generated package at version `0.0.3`. **Re-verify after a version bump** — this page is a snapshot, not a live read.
+Verified against `package.json` and `sdk-map.md` of the generated package at version `0.0.4`. **Re-verify after a version bump** — this page is a snapshot, not a live read.
 
 | Fact | Value |
 | --- | --- |
@@ -21,7 +21,7 @@ Verified against `package.json` and `sdk-map.md` of the generated package at ver
 | Package name (what you install, and what you import) | `paddle-apimatic-sdk` — published to npm |
 | Import specifier | `paddle-apimatic-sdk` — the package root is the **only** entry; deep imports do not resolve |
 | Source repository | https://github.com/sdks-io/paddle-apimatic-js-sdk (branch `main` — the ref this map documents) |
-| Version | `0.0.3` (API spec version `0.0.3`) |
+| Version | `0.0.4` (API spec version `0.0.4`) |
 | Client class | `PaddleApiClient` (`src/client.ts`) — one class, no sync/async split |
 | Options type | `ClientOptions` (`src/client-options.ts`) — types only, no resolver beside it |
 | Client construction | `new PaddleApiClient(options: ClientOptions = {})` — the argument is optional, as is **every** field on it, so `new PaddleApiClient()` compiles. Fields: `serverEnvironment` · `serverOptions` · `retry` · `fetch` · `bearerAuth`. `retry` is the `RetryOptions` policy; its defaults retry a GET, HEAD, PUT or OPTIONS call up to `3` times and bound each attempt by `retry.timeout` = `60_000` ms, and every one of them can be changed |
