@@ -1,16 +1,18 @@
 # Webhooks: events, rules, handling
 
-Code: `templates/server/paddle/webhooks/*`. Destination: created once by the agent with `client.notificationSettings.createNotificationSetting` (SKILL.md section 7).
+Code: `templates/server/paddle/webhooks/*`. Destination: created or reused by the agent with `scripts/paddle-setup.ts webhook <url>` (SKILL.md section 7).
 
 ## Rules (from Paddle's webhook documentation)
 
 1. **Verify first.** Header `Paddle-Signature: ts=<unix seconds>;h1=<hex>` (several `h1` during secret rotation). Signed payload is `${ts}:${rawBody}`; HMAC-SHA256 with the destination's `endpoint_secret_key` (`pdl_ntfset_…`), hex, constant-time compare. The body must be the raw bytes. Reject when `|now − ts|` exceeds the tolerance (Paddle's SDKs use 5 seconds; `PADDLE_WEBHOOK_TOLERANCE_SECONDS` to loosen when a queue runs before the handler).
-2. **Answer 200 within 5 seconds.** Do the work after answering (queue) or keep inline processing fast. A non-2xx or a timeout makes Paddle retry: live 60 attempts over 3 days (20 in the first hour), sandbox 3 attempts in 15 minutes; then the notification is `failed` and can be replayed with `replayNotification`.
-3. **At-least-once.** The same `event_id` can arrive twice (and per destination each delivery has its own `notification_id`). Insert `event_id` into `paddle_webhook_events` first; a conflict with a processed row means skip. A row whose processing failed is processed again on the redelivery.
+2. **Answer within 5 seconds.** The adapters process, then answer; keep hooks fast. A non-2xx or a timeout makes Paddle retry: live 60 attempts over 3 days (20 in the first hour), sandbox 3 attempts in 15 minutes; then the notification is `failed` and can be replayed with `replayNotification`. Paddle stops either way, so the reprocess job (`webhooks/reprocess.ts`, `paddle-jobs.ts reprocess`) re-runs every event still unprocessed in the app's table.
+3. **At-least-once.** The same `event_id` can arrive twice (and per destination each delivery has its own `notification_id`). Insert `event_id` into `paddle_webhook_events` first; a conflict with a processed row means skip. A row whose processing failed is processed again on the redelivery or by the reprocess job.
+3a. **Undecodable bodies are final.** A body that does not match the SDK model for its event type cannot succeed on a retry. The handler parks it (`final_state = 'undecodable'`, raw payload kept), answers 200 and calls `onEventNeedsAttention`; after an SDK upgrade, `paddle-jobs.ts reopen undecodable` applies the parked events.
 4. **Unordered.** Compare `occurred_at` with the row's `last_event_occurred_at`; ignore older events. Never infer state from arrival order or from the event name alone — read `data.status`.
 5. **Full entity in `data`.** Every event carries the whole entity as it was at `occurred_at`. The handler decodes it with the SDK's model for that event type (`webhooks/types.ts`). Subscription payloads omit `management_urls` (they are temporary).
 6. **Source IPs** (if you filter): sandbox `34.194.127.46, 54.234.237.108, 3.208.120.145, 44.226.236.210, 44.241.183.62, 100.20.172.113`; live `34.232.58.13, 34.195.105.136, 34.237.3.244, 35.155.119.135, 52.11.166.252, 34.212.5.7`; or `client.ipAddresses.getIpAddresses()` per environment. Let the webhook path bypass WAF bot checks.
-7. **Destinations**: `type: "url"`, HTTPS, max 10 active; `traffic_source: "all"` to receive simulations too; events list is replaced on update (send the complete list); `api_version: 1`. The secret is readable on GET of the destination; rotation is not offered by the API (create a new destination, switch, delete the old).
+7. **Destinations**: `type: "url"`, HTTPS, one per URL, max 10 active; `traffic_source: "all"` to receive simulations too; events list is replaced on update (send the complete list); `api_version: 1`. The secret is readable on GET of the destination; rotation is not offered by the API (create a new destination, switch, delete the old).
+8. **Every destination receives every event on the account.** Destinations filter by event type only. Two apps (or a staging and a production deployment) on one Paddle account receive each other's subscriptions and purchases. The handler applies an event only when one of its prices is in `plan_catalog` (or it concerns a row the app already holds) and records the rest as ignored; `getEntitlement` grants access only for a listed tier. Prefer one Paddle account per app.
 
 ## Events to subscribe to and what to do
 
@@ -22,11 +24,11 @@ Code: `templates/server/paddle/webhooks/*`. Destination: created once by the age
 | `subscription.trialing` | created in trial | mirror upserted |
 | `subscription.past_due` | a renewal payment failed | show banner, email customer; keep access |
 | `subscription.paused` / `resumed` / `canceled` | status changes | mirror upserted from the event's `data`; hook for emails |
-| `transaction.completed` | payment captured and processed | **fulfil one-time purchases**: every item when `subscriptionId` is null, and the one-time items of a subscription checkout; renewals and charges (origin `subscription_*`) also complete — ignore for access, use for receipts |
+| `transaction.completed` | payment captured and processed | **fulfil one-time purchases**: one `paddle_purchase_items` row per one-time catalog line (every item when `subscriptionId` is null, and the one-time items of a subscription checkout); renewals and charges (origin `subscription_*`) also complete — ignore for access, use for receipts |
 | `transaction.payment_failed` | a payment attempt failed (checkout or renewal) | `onPaymentFailed` hook: notify; Paddle retries renewals |
 | `transaction.paid` | captured but not yet processed | do nothing (may lack `invoice_number`, `subscription_id`) |
 | `transaction.billed` | invoice issued (manual collection) | B2B invoicing only |
-| `adjustment.created` / `adjustment.updated` | refund/credit/chargeback created or changed status | on `approved` refund: revoke the item, negative credit entry; on chargeback: same |
+| `adjustment.created` / `adjustment.updated` | refund/credit/chargeback created or changed status | an approved refund (on either event: refunds that qualify for automatic approval are created `approved` and never send `adjustment.updated` on live) or a chargeback marks the purchase lines it covers as refunded; `onPurchaseRefunded` revokes what they gave (negative credit entry) |
 | `customer.created` / `updated`, `address.*`, `business.*` | buyer records | optional: refresh email/name cache |
 | `price.*`, `product.*`, `discount.*` | catalog edits in the dashboard | optional: invalidate catalog cache |
 | `payout.created` / `payout.paid` | Paddle paid the owner | owner notification only |

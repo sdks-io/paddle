@@ -1,0 +1,100 @@
+{
+  "event_id": "evt_01m46k1mzpn8g5bqmnd1pc8tba",
+  "event_type": "subscription.trialing",
+  "occurred_at": "2026-10-05T17:51:06.23+00:00",
+  "notification_id": "ntf_x",
+  "data": {
+    "id": "sub_01m46k1mn8qj3kpg21abg2b96s",
+    "items": [
+      {
+        "price": {
+          "id": "pri_01m46f5wp8cm8xwfncrs253j6g",
+          "name": "Jotter Pro (monthly)",
+          "type": "standard",
+          "status": "active",
+          "quantity": {
+            "maximum": 100,
+            "minimum": 1
+          },
+          "tax_mode": "location",
+          "created_at": "2026-10-05T16:43:30.888Z",
+          "product_id": "pro_01m46f5wbv5af74rncp1zdbjgp",
+          "unit_price": {
+            "amount": "800",
+            "currency_code": "USD"
+          },
+          "updated_at": "2026-10-05T16:47:03.199888Z",
+          "custom_data": {
+            "seed_key": "jotter-pro-monthly-trial"
+          },
+          "description": "Jotter Pro monthly, 14-day trial",
+          "import_meta": null,
+          "trial_period": {
+            "interval": "day",
+            "frequency": 14,
+            "requires_payment_method": true
+          },
+          "billing_cycle": {
+            "interval": "month",
+            "frequency": 1
+          },
+          "unit_price_overrides": []
+        },
+        "status": "trialing",
+        "product": {
+          "id": "pro_01m46f5wbv5af74rncp1zdbjgp",
+          "name": "Jotter Pro",
+          "type": "standard",
+          "status": "active",
+          "image_url": null,
+          "created_at": "2026-10-05T16:43:30.555Z",
+          "updated_at": "2026-10-05T16:47:02.888Z",
+          "custom_data": {
+            "seed_key": "jotter-pro"
+          },
+          "description": "Jotter Pro: unlimited notes",
+          "tax_category": "saas"
+        },
+        "quantity": 1,
+        "recurring": true,
+        "created_at": "2026-10-05T17:51:05.896Z",
+        "updated_at": "2026-10-05T17:51:05.896Z",
+        "trial_dates": {
+          "ends_at": "2026-10-19T17:51:05.889Z",
+          "starts_at": "2026-10-05T17:51:05.889Z"
+        },
+        "next_billed_at": "2026-10-19T17:51:05.889Z",
+        "previously_billed_at": null
+      }
+    ],
+    "status": "trialing",
+    "discount": null,
+    "paused_at": null,
+    "address_id": "add_01m46k1bx3m9j6j7wn60c4y31b",
+    "created_at": "2026-10-05T17:51:05.896Z",
+    "started_at": "2026-10-05T17:51:05.889Z",
+    "updated_at": "2026-10-05T17:51:05.896Z",
+    "business_id": null,
+    "canceled_at": null,
+    "custom_data": {
+      "user_id": "7a0fef09-d460-499b-a8b4-7807ae5e1f9b"
+    },
+    "customer_id": "ctm_01m46k19k2aky9zy0mb7a2w6jk",
+    "import_meta": null,
+    "billing_cycle": {
+      "interval": "month",
+      "frequency": 1
+    },
+    "currency_code": "USD",
+    "next_billed_at": "2026-10-19T17:51:05.889Z",
+    "billing_details": null,
+    "collection_mode": "automatic",
+    "first_billed_at": null,
+    "scheduled_change": null,
+    "consent_requirements": [],
+    "current_billing_period": {
+      "ends_at": "2026-10-19T17:51:05.889Z",
+      "starts_at": "2026-10-05T17:51:05.889Z"
+    }
+  }
+}

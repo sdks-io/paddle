@@ -21,8 +21,10 @@ export type PaddleEnvironment = "sandbox" | "production";
 export interface PaddleConfig {
   environment: PaddleEnvironment;
   apiKey: string;
-  /** API base URL: https://sandbox-api.paddle.com or https://api.paddle.com */
+  /** API base URL this deployment reaches: https://sandbox-api.paddle.com or https://api.paddle.com (or the override). */
   apiBaseUrl: string;
+  /** PADDLE_API_URL when set; client.ts passes it as the base URL of the selected environment. */
+  apiUrlOverride: string | undefined;
   /** Endpoint secret key of the webhook destination; undefined when webhooks are not wired yet. */
   webhookSecret: string | undefined;
   /** Max age of a webhook signature timestamp, in seconds. Paddle's SDKs default to 5. */
@@ -70,10 +72,12 @@ export function loadPaddleConfig(env: NodeJS.ProcessEnv = process.env): PaddleCo
     throw new Error("Paddle config: PADDLE_WEBHOOK_TOLERANCE_SECONDS must be a positive number");
   }
 
+  const apiUrlOverride = env.PADDLE_API_URL?.trim() || undefined;
   return {
     environment,
     apiKey,
-    apiBaseUrl: env.PADDLE_API_URL?.trim() || API_BASE_URLS[environment],
+    apiBaseUrl: apiUrlOverride ?? API_BASE_URLS[environment],
+    apiUrlOverride,
     webhookSecret,
     webhookToleranceSeconds: tolerance,
   };

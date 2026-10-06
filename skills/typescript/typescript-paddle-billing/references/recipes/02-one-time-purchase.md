@@ -23,17 +23,17 @@ Needs: `pri_…`, client token. Produces: a completed sandbox transaction.
 
 `openCheckout(config, { items: [{ priceId, quantity: 1 }], userId, customer: { email } })`. Quantity can be above 1 for packs; the price's `quantity.maximum` bounds it.
 
-For a cart with several one-time items or a server-controlled amount, create the transaction server side (`createCheckoutTransaction` with a `claimKey` such as `order:<orderId>`) and open it with `openTransactionCheckout`. `createCheckoutTransaction` takes catalog price IDs only. For a quote or a negotiated amount (not for standard products), call `client.transactions.createTransaction` directly with an item that carries a `price` object (description, product ID, unit price) in place of a `priceId`; Paddle creates a hidden custom price for that existing product (fields: `map/operations/transactions.md`). Then open it with `openTransactionCheckout`.
+For a cart with several one-time items or a server-controlled amount, create the transaction server side (`createCheckoutTransaction` with `claimKey: "order:" + orderId` when the app has orders, otherwise `checkoutClaimKey(userId, items)`) and open it with `openTransactionCheckout`. `createCheckoutTransaction` takes catalog price IDs only. For a quote or a negotiated amount (not for standard products), call `client.transactions.createTransaction` directly with an item that carries a `price` object (description, product ID, unit price) in place of a `priceId`; Paddle creates a hidden custom price for that existing product (fields: `map/operations/transactions.md`). Then open it with `openTransactionCheckout`.
 
 ## Step 3 — Fulfil on `transaction.completed`
 
 Needs: webhook handler. Produces: a `paddle_purchases` row.
 
-The handler writes the row only on `transaction.completed`: for every item when the transaction has no subscription, and for the one-time items (no billing cycle) when they were bought at checkout together with a subscription. `transaction.paid` arrives earlier but is not final (Paddle has not finished processing; it may lack the invoice number). Hook `onPurchaseCompleted(tx, userId, items)` (`items` holds only the one-time items) to deliver the goods (send the download link, mint the licence key, add credits — recipe 03).
+The handler writes the purchase only on `transaction.completed`, one line per one-time catalog item with its quantity and Paddle line item id: every item when the transaction has no subscription, and the one-time items (no billing cycle) when they were bought at checkout together with a subscription. Prices not in `plan_catalog` are not recorded, so add a `plan_catalog` row for each one-time price (tier key = what it unlocks). `transaction.paid` arrives earlier but is not final (Paddle has not finished processing; it may lack the invoice number). Hook `onPurchaseCompleted(purchase, tx)` (`purchase.items` holds only the one-time lines) to deliver the goods (send the download link, mint the licence key, add credits — recipe 03).
 
 Access check: `hasPurchased(store, userId, "pro_…")`.
 
-If the buyer was not signed in, `custom_data.user_id` is missing and `userId` is null: the row is still stored with `paddle_customer_id`; on the next sign-in match by email (`ensureCustomer` links user → customer) and re-run `store.getUserIdForCustomer(...)`. Prefer requiring sign-in before checkout.
+If the buyer was not signed in, `custom_data.user_id` is missing and `userId` is null: the row is still stored with `paddle_customer_id`. When that user signs in and `ensureCustomer` links them to the customer (verified email), it calls `store.assignUserToCustomerRows`, which gives them those rows. Prefer requiring sign-in before checkout.
 
 ## Step 4 — Receipt and invoice
 
@@ -41,13 +41,13 @@ Paddle emails the receipt and invoice. In the app, `getInvoiceUrl(transactionId)
 
 ## Step 5 — Refund (later)
 
-Recipe 05: `refundTransaction(txnId, reason)`. On `adjustment.updated` with `status: "approved"` and `action: "refund"`, revoke the item (delete the purchase row or mark it refunded) in `onAdjustment`.
+Recipe 05: `refundTransaction(store, txnId, reason)` (whole transaction) or with line items. When the refund is approved (on `adjustment.created` or `adjustment.updated`), the handler marks the lines it covers as refunded, so `hasPurchased` turns false for them; revoke anything else they gave in `onPurchaseRefunded`.
 
 ## Checks
 
-- A second click on the button after a successful purchase would create a second transaction: disable the button when `hasPurchased` is true, and use a claim key for server-created transactions.
+- A second click on the button after a successful purchase would create a second transaction: disable the button when `hasPurchased` is true; server-created transactions are claimed (`checkoutClaimKey`), so a double submit creates one.
 - Do not deliver on the success page or on `checkout.completed`; wait for the webhook, as in recipe 01 step 6.
-- Quantity-based packs: multiply by `items[0].quantity` from the webhook, not from the button.
+- Quantity-based packs: multiply by each line's `quantity` in `purchase.items` (from the webhook), not from the button. Give pack prices a `quantity` range in the seed file; the default 1–1 hides the picker.
 
 ## Done when
 

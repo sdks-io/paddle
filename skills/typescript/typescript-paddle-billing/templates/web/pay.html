@@ -1,13 +1,14 @@
 <!doctype html>
 <!--
   Default payment link page. Paddle requires a "default payment link" in
-  Paddle > Checkout > Checkout configuration. Paddle builds transaction checkout
+  Paddle > Checkout > Checkout settings. Paddle builds transaction checkout
   URLs from it (https://yourapp.com/pay?_ptxn=txn_...) and uses it in emails
   (e.g. update payment method). The page must load Paddle.js; Paddle.js opens
   the checkout automatically when _ptxn is in the URL.
 
-  Sandbox: https://localhost/ (or any URL) is accepted. Live: must be an approved
-  domain. Serve this at the path you configured, e.g. /pay.
+  Add the domain under website approval first (sandbox approves it at once; live
+  reviews it). Serve this at the path you configured, e.g. /pay, and replace
+  /billing/thank-you with the app's page that polls the entitlement.
 -->
 <html lang="en">
   <head>

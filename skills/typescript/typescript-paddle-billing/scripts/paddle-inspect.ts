@@ -33,7 +33,7 @@ async function main(): Promise<void> {
       return;
     }
     case "catalog": {
-      const prices = await listAll((after) => client.prices.listPrices({ status: ["active"], include: ["product"], perPage: 200, after }));
+      const prices = await listAll((after) => client.prices.listPrices({ status: ["active"], include: ["product"], perPage: 200, ...(after ? { after } : {}) }));
       out(
         prices.map((p) => ({
           priceId: p.id,

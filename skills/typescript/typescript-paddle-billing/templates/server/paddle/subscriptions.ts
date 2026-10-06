@@ -15,9 +15,55 @@
  * - Paused subscriptions accept only do_not_bill.
  * - Cancel defaults to the end of the period (scheduled_change); immediate cancel does not refund.
  * - Canceled subscriptions cannot be reinstated; the customer buys again.
+ * - Paddle cannot schedule an item change; a plan change at the end of the term is kept by the
+ *   app and applied shortly before the renewal (requestPlanChangeAtRenewal / applyDuePlanChanges).
+ *
+ * Updates that set a state are safe to repeat, so they take no claim. When their outcome is
+ * unknown (connection lost, timeout, 5xx), the subscription is re-read: if it already shows the
+ * requested state the update counts as done, otherwise OutcomeUnknownError (never "failed").
  */
-import type { PriceWithProductCollectionIncludes, ProrationBillingMode, SubscriptionStatus, SubscriptionUpdateItems, SubscriptionChargeItems } from "paddle-apimatic-sdk";
+import type {
+  PriceWithProductCollectionIncludes,
+  ProrationBillingMode,
+  SubscriptionChargeItems,
+  SubscriptionStatus,
+  SubscriptionUpdateItems,
+} from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";
+import { OutcomeUnknownError, writeOutcome } from "./errors.js";
+import type { PaddleStore, PendingPlanChange } from "./store.js";
+import { claimedWrite } from "./writes.js";
+
+type Subscription = Awaited<ReturnType<typeof readSubscription>>;
+
+async function readSubscription(subscriptionId: string) {
+  return (await getPaddleClient().subscriptions.getSubscription({ subscriptionId })).data;
+}
+
+/** Runs a state-setting update; on an unknown outcome, re-reads and accepts the update when `done(sub)` holds. */
+async function settledUpdate<T>(operation: string, subscriptionId: string, update: () => Promise<T>, done: (sub: Subscription) => boolean): Promise<T | Subscription> {
+  try {
+    return await update();
+  } catch (err) {
+    if (writeOutcome(err) !== "unknown") throw err;
+    let sub: Subscription;
+    try {
+      sub = await readSubscription(subscriptionId);
+    } catch {
+      throw new OutcomeUnknownError(operation, subscriptionId, { cause: err });
+    }
+    if (done(sub)) return sub;
+    throw new OutcomeUnknownError(operation, subscriptionId, { cause: err });
+  }
+}
+
+const sameItems = (sub: Subscription, items: { priceId: string; quantity?: number }[]) => {
+  const active = sub.items.filter((i) => i.status !== "inactive");
+  return (
+    active.length === items.length &&
+    items.every((want) => active.some((have) => have.price.id === want.priceId && (want.quantity === undefined || have.quantity === want.quantity)))
+  );
+};
 
 /** Current subscription from Paddle, with the next transaction (upcoming renewal) and recurring totals. */
 export async function getSubscriptionWithNext(subscriptionId: string) {
@@ -26,6 +72,12 @@ export async function getSubscriptionWithNext(subscriptionId: string) {
     include: ["next_transaction", "recurring_transaction_details"],
   });
   return res.data;
+}
+
+/** The subscription's active items as the complete list an update needs (base plan and add-ons). */
+export async function currentItems(subscriptionId: string): Promise<{ priceId: string; quantity: number }[]> {
+  const sub = await readSubscription(subscriptionId);
+  return sub.items.filter((i) => i.status !== "inactive").map((i) => ({ priceId: i.price.id, quantity: i.quantity }));
 }
 
 /**
@@ -39,6 +91,8 @@ export async function getSubscriptionWithNext(subscriptionId: string) {
  *  - "do_not_bill": change items without charging (required while trialing or paused).
  * Credits that exceed the charge are added to the customer's credit balance and are used on future invoices.
  * For a change the customer asked for, take `mode` from chooseProrationMode, never from the request.
+ * If an immediate charge fails, Paddle's default leaves the subscription as it was; pass
+ * applyEvenIfPaymentFails only when the user asked for the change to stand regardless.
  */
 export async function changePlan(
   subscriptionId: string,
@@ -50,16 +104,20 @@ export async function changePlan(
   const body = {
     items: items.map((i): SubscriptionUpdateItems => (i.quantity === undefined ? { priceId: i.priceId } : { priceId: i.priceId, quantity: i.quantity })),
     prorationBillingMode: mode,
-    // prevent_change (default): if the immediate charge fails, Paddle leaves the subscription as it was.
-    onPaymentFailure: options.applyEvenIfPaymentFails ? "apply_change" : "prevent_change",
-  } as const;
+    ...(options.applyEvenIfPaymentFails ? { onPaymentFailure: "apply_change" as const } : {}),
+  };
 
   if (options.preview) {
     const preview = await client.subscriptions.previewSubscriptionUpdate({ subscriptionId, body });
     return { preview: preview.data };
   }
-  const updated = await client.subscriptions.updateSubscription({ subscriptionId, body });
-  return { subscription: updated.data };
+  const subscription = await settledUpdate(
+    "updateSubscription (items)",
+    subscriptionId,
+    async () => (await client.subscriptions.updateSubscription({ subscriptionId, body })).data,
+    (sub) => sameItems(sub, items),
+  );
+  return { subscription };
 }
 
 /**
@@ -78,19 +136,137 @@ export async function chooseProrationMode(
     client.prices.getPrice({ priceId: current.priceId }),
     client.prices.getPrice({ priceId: target.priceId }),
   ]);
-  const cycle = (p: PriceWithProductCollectionIncludes) => (p.billingCycle ? `${p.billingCycle.interval}:${p.billingCycle.frequency}` : "none");
   // A change of billing frequency allows only prorated_immediately, full_immediately or do_not_bill.
-  if (cycle(from.data) !== cycle(to.data)) return "prorated_immediately";
+  if (cycleOf(from.data) !== cycleOf(to.data)) return "prorated_immediately";
   if (from.data.unitPrice.currencyCode !== to.data.unitPrice.currencyCode) return "prorated_immediately";
   const total = (p: PriceWithProductCollectionIncludes, quantity: number) => BigInt(p.unitPrice.amount) * BigInt(quantity);
   // Upgrade: charge the difference now. Downgrade: switch now, credit the difference on the next invoice.
   return total(to.data, target.quantity) >= total(from.data, current.quantity) ? "prorated_immediately" : "prorated_next_billing_period";
 }
 
+const cycleOf = (p: { billingCycle?: { interval: string; frequency: number } | null }) =>
+  p.billingCycle ? `${p.billingCycle.interval}:${p.billingCycle.frequency}` : "none";
+
 /** Seats: same price, new quantity. The price's quantity.minimum/maximum bound what Paddle accepts. */
 export async function setSeats(subscriptionId: string, priceId: string, seats: number, mode: ProrationBillingMode = "prorated_immediately") {
   return changePlan(subscriptionId, [{ priceId, quantity: seats }], mode);
 }
+
+// ------------------------------------------------------------- plan change at the end of the term
+
+/** The job applies a pending change inside this window before the renewal (Paddle locks changes in the last 30 minutes). */
+export const PLAN_CHANGE_WINDOW = { startBeforeRenewalMs: 2 * 60 * 60_000, endBeforeRenewalMs: 35 * 60_000 };
+
+/** Thrown when a change cannot be scheduled for the end of the term (no renewal date, too close to it, or another change is scheduled). */
+export class PlanChangeNotSchedulableError extends Error {
+  readonly status = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanChangeNotSchedulableError";
+  }
+}
+
+/**
+ * Records a plan change that takes effect at the end of the current term (for example yearly →
+ * monthly, or a downgrade the customer has already paid the higher tier for). Nothing changes in
+ * Paddle now; applyDuePlanChanges applies it shortly before the renewal. One open change per
+ * subscription: a new request replaces the open one. `items` is the complete list after the change.
+ */
+export async function requestPlanChangeAtRenewal(
+  store: PaddleStore,
+  input: { subscriptionId: string; userId: string; items: { priceId: string; quantity: number }[] },
+): Promise<PendingPlanChange> {
+  const sub = await readSubscription(input.subscriptionId);
+  if (sub.status !== "active") throw new PlanChangeNotSchedulableError(`subscription is ${sub.status}; only active subscriptions renew`);
+  if (sub.scheduledChange) throw new PlanChangeNotSchedulableError(`a ${sub.scheduledChange.action} is scheduled; remove it first`);
+  if (!sub.nextBilledAt) throw new PlanChangeNotSchedulableError("subscription has no next renewal");
+  const renewalAt = sub.nextBilledAt;
+  if (renewalAt.getTime() - Date.now() < PLAN_CHANGE_WINDOW.endBeforeRenewalMs) {
+    throw new PlanChangeNotSchedulableError("too close to the renewal; try again after it");
+  }
+  const change: PendingPlanChange = {
+    subscriptionId: input.subscriptionId,
+    userId: input.userId,
+    items: input.items,
+    renewalAt,
+    applyAfter: new Date(renewalAt.getTime() - PLAN_CHANGE_WINDOW.startBeforeRenewalMs),
+    requestedAt: new Date(),
+    appliedAt: null,
+    canceledAt: null,
+    note: null,
+  };
+  await store.savePendingPlanChange(change);
+  return change;
+}
+
+/** Customer changed their mind before the renewal. */
+export async function cancelPlanChangeAtRenewal(store: PaddleStore, subscriptionId: string): Promise<void> {
+  await store.finishPendingPlanChange(subscriptionId, "canceled", new Date(), "canceled by the customer");
+}
+
+/**
+ * Applies pending end-of-term changes whose window has opened. Run it from a scheduler at least
+ * every 15 minutes (the window is 2 hours wide and closes 35 minutes before the renewal).
+ * - Same billing cycle: items change with do_not_bill; the renewal then bills the new price.
+ * - Different billing cycle (yearly ↔ monthly): Paddle allows only immediate modes, so the change
+ *   is applied with full_immediately: the new price is charged now and a new term starts now,
+ *   at most two hours before the old term would have ended. Nothing is credited for those minutes.
+ * A subscription that is no longer active, has a scheduled cancel or pause, or whose renewal moved
+ * is skipped (canceled, or re-planned against the new renewal date).
+ */
+export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Date()): Promise<{ applied: string[]; skipped: { subscriptionId: string; reason: string }[] }> {
+  const result = { applied: [] as string[], skipped: [] as { subscriptionId: string; reason: string }[] };
+  for (const change of await store.listDuePendingPlanChanges(now)) {
+    const skip = async (reason: string, cancel: boolean) => {
+      result.skipped.push({ subscriptionId: change.subscriptionId, reason });
+      if (cancel) await store.finishPendingPlanChange(change.subscriptionId, "canceled", now, reason);
+    };
+    try {
+      const sub = await readSubscription(change.subscriptionId);
+      if (sub.status !== "active") {
+        await skip(`subscription is ${sub.status}`, true);
+        continue;
+      }
+      if (sub.scheduledChange) {
+        await skip(`a ${sub.scheduledChange.action} is scheduled`, true);
+        continue;
+      }
+      if (!sub.nextBilledAt || sub.nextBilledAt.getTime() !== change.renewalAt.getTime()) {
+        // The renewal date moved (trial extended, date changed, or the renewal already happened): plan against the new one.
+        if (sub.nextBilledAt) {
+          await store.savePendingPlanChange({
+            ...change,
+            renewalAt: sub.nextBilledAt,
+            applyAfter: new Date(sub.nextBilledAt.getTime() - PLAN_CHANGE_WINDOW.startBeforeRenewalMs),
+          });
+        }
+        await skip("renewal date moved; re-planned", !sub.nextBilledAt);
+        continue;
+      }
+      if (sub.nextBilledAt.getTime() - now.getTime() < PLAN_CHANGE_WINDOW.endBeforeRenewalMs) {
+        await skip("window missed; Paddle locks changes 30 minutes before renewal", false);
+        continue;
+      }
+      const target = change.items[0];
+      const currentPrice = sub.items.find((i) => i.status !== "inactive")?.price;
+      if (!target || !currentPrice) {
+        await skip("no items to compare", true);
+        continue;
+      }
+      const targetPrice = (await getPaddleClient().prices.getPrice({ priceId: target.priceId })).data;
+      const mode: ProrationBillingMode = cycleOf(currentPrice) === cycleOf(targetPrice) ? "do_not_bill" : "full_immediately";
+      await changePlan(change.subscriptionId, change.items, mode);
+      await store.finishPendingPlanChange(change.subscriptionId, "applied", new Date(), `applied with ${mode}`);
+      result.applied.push(change.subscriptionId);
+    } catch (err) {
+      // Left open: the next run tries again while the window lasts. Log it.
+      result.skipped.push({ subscriptionId: change.subscriptionId, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return result;
+}
+
+// ------------------------------------------------------------- cancel, pause, resume, trial
 
 /**
  * Cancel. Default: at the end of the current period — status stays active,
@@ -98,55 +274,92 @@ export async function setSeats(subscriptionId: string, priceId: string, seats: n
  * immediately: status canceled now, no automatic refund (use adjustments.ts).
  */
 export async function cancelSubscription(subscriptionId: string, when: "next_billing_period" | "immediately" = "next_billing_period") {
-  const res = await getPaddleClient().subscriptions.cancelSubscription({ subscriptionId, body: { effectiveFrom: when } });
-  return res.data;
+  return settledUpdate(
+    "cancelSubscription",
+    subscriptionId,
+    async () => (await getPaddleClient().subscriptions.cancelSubscription({ subscriptionId, body: { effectiveFrom: when } })).data,
+    (sub) => (when === "immediately" ? sub.status === "canceled" : sub.scheduledChange?.action === "cancel"),
+  );
 }
 
 /** Undo a scheduled cancel or pause before it takes effect. */
 export async function removeScheduledChange(subscriptionId: string) {
-  const res = await getPaddleClient().subscriptions.updateSubscription({ subscriptionId, body: { scheduledChange: null } });
-  return res.data;
+  return settledUpdate(
+    "updateSubscription (scheduled_change: null)",
+    subscriptionId,
+    async () => (await getPaddleClient().subscriptions.updateSubscription({ subscriptionId, body: { scheduledChange: null } })).data,
+    (sub) => !sub.scheduledChange,
+  );
 }
 
 /**
  * Pause. Default effective at the next billing period (scheduled_change.action = "pause").
- * resumeAt schedules an automatic resume. onResume "start_new_billing_period" (default) bills on resume;
+ * resumeAt schedules an automatic resume. onResume "start_new_billing_period" (Paddle's default) bills on resume;
  * "continue_existing_billing_period" resumes the paused period without a new charge.
  */
 export async function pauseSubscription(
   subscriptionId: string,
   options: { when?: "next_billing_period" | "immediately"; resumeAt?: Date; onResume?: "start_new_billing_period" | "continue_existing_billing_period" } = {},
 ) {
-  const res = await getPaddleClient().subscriptions.pauseSubscription({
+  return settledUpdate(
+    "pauseSubscription",
     subscriptionId,
-    body: { effectiveFrom: options.when, resumeAt: options.resumeAt, onResume: options.onResume },
-  });
-  return res.data;
+    async () =>
+      (
+        await getPaddleClient().subscriptions.pauseSubscription({
+          subscriptionId,
+          body: {
+            ...(options.when ? { effectiveFrom: options.when } : {}),
+            ...(options.resumeAt ? { resumeAt: options.resumeAt } : {}),
+            ...(options.onResume ? { onResume: options.onResume } : {}),
+          },
+        })
+      ).data,
+    (sub) => sub.status === "paused" || sub.scheduledChange?.action === "pause",
+  );
 }
 
 /** Resume a paused subscription now, or at a date. Bills immediately when a new billing period starts. */
 export async function resumeSubscription(subscriptionId: string, at: "immediately" | Date = "immediately") {
-  const res = await getPaddleClient().subscriptions.resumeSubscription({
+  return settledUpdate(
+    "resumeSubscription",
     subscriptionId,
-    body: at === "immediately" ? { effectiveFrom: "immediately" } : { effectiveFrom: at },
-  });
-  return res.data;
+    async () =>
+      (
+        await getPaddleClient().subscriptions.resumeSubscription({
+          subscriptionId,
+          body: at === "immediately" ? { effectiveFrom: "immediately" } : { effectiveFrom: at },
+        })
+      ).data,
+    (sub) => (at === "immediately" ? sub.status === "active" : sub.scheduledChange?.action === "resume"),
+  );
 }
 
 /** Convert a trialing subscription to active now (charges the stored payment method). Automatic collection only. */
 export async function activateTrialNow(subscriptionId: string) {
-  const res = await getPaddleClient().subscriptions.activateSubscription({ subscriptionId });
-  return res.data;
+  return settledUpdate(
+    "activateSubscription",
+    subscriptionId,
+    async () => (await getPaddleClient().subscriptions.activateSubscription({ subscriptionId })).data,
+    (sub) => sub.status === "active",
+  );
 }
 
 /** Extend a trial or move the renewal date. Must be at least 30 minutes in the future; while trialing, items/dates use do_not_bill. */
 export async function setNextBilledAt(subscriptionId: string, nextBilledAt: Date) {
-  const res = await getPaddleClient().subscriptions.updateSubscription({
+  return settledUpdate(
+    "updateSubscription (next_billed_at)",
     subscriptionId,
-    body: { nextBilledAt, prorationBillingMode: "do_not_bill" },
-  });
-  return res.data;
+    async () => (await getPaddleClient().subscriptions.updateSubscription({ subscriptionId, body: { nextBilledAt, prorationBillingMode: "do_not_bill" } })).data,
+    (sub) => sub.nextBilledAt?.getTime() === nextBilledAt.getTime(),
+  );
 }
+
+// ------------------------------------------------------------- one-off charges
+
+export type ChargeItem =
+  | { priceId: string; quantity: number }
+  | { description: string; productId: string; amount: string; currencyCode: string; quantity: number };
 
 /**
  * One-off charge on a subscription (usage, overage, add-on purchase).
@@ -154,12 +367,16 @@ export async function setNextBilledAt(subscriptionId: string, nextBilledAt: Date
  * when "immediately": a transaction is created and charged now (limit: 20/hour, 100/day per subscription).
  * when "next_billing_period": the charge is added to the next renewal invoice.
  * Charges do not appear in subscription.items; find them on the transaction (origin subscription_charge).
+ *
+ * `ref` names what is being charged, the same for every attempt at the same charge: a usage period
+ * ("usage:2026-10") or an order id. A second call with the same ref does not charge again.
  */
 export async function chargeOneOff(
+  store: PaddleStore,
   subscriptionId: string,
-  items: ({ priceId: string; quantity: number } | { description: string; productId: string; amount: string; currencyCode: string; quantity: number })[],
+  items: ChargeItem[],
   when: "immediately" | "next_billing_period",
-  options: { preview?: boolean } = {},
+  options: { ref: string; preview?: boolean },
 ) {
   const client = getPaddleClient();
   const body = {
@@ -182,15 +399,48 @@ export async function chargeOneOff(
     const preview = await client.subscriptions.previewSubscriptionCharge({ subscriptionId, body });
     return { preview: preview.data };
   }
-  const res = await client.subscriptions.createSubscriptionCharge({ subscriptionId, body });
-  return { subscription: res.data };
+
+  // Lines that show this charge was made, on the charge's own transaction or on the next renewal.
+  // A catalog item matches by price; an inline item by product (and description where the line carries one).
+  type Line = { priceId: string | null; productId: string | null; description?: string };
+  const matches = (lines: Line[]) =>
+    items.every((i) =>
+      lines.some((l) => ("priceId" in i ? l.priceId === i.priceId : l.productId === i.productId && (l.description === undefined || l.description === i.description))),
+    );
+
+  const { value, reused } = await claimedWrite(store, {
+    claimKey: `charge:${subscriptionId}:${options.ref}`,
+    kind: "charge",
+    userId: null,
+    operation: "createSubscriptionCharge",
+    reuse: async (id) => id,
+    find: async (since) => {
+      if (when === "immediately") {
+        const txns = await client.transactions.listTransactions({ subscriptionId: [subscriptionId], origin: ["subscription_charge"], orderBy: "created_at[DESC]", perPage: 30 });
+        const hit = txns.data.find((t) => t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))));
+        return hit ? { id: subscriptionId, value: subscriptionId } : undefined;
+      }
+      const sub = await client.subscriptions.getSubscription({ subscriptionId, include: ["next_transaction"] });
+      const next = sub.data.nextTransaction;
+      const lines = next ? next.details.lineItems.map((l) => ({ priceId: l.priceId ?? null, productId: l.product.id ?? null })) : [];
+      return next && matches(lines) ? { id: subscriptionId, value: subscriptionId } : undefined;
+    },
+    write: async () => {
+      const res = await client.subscriptions.createSubscriptionCharge({ subscriptionId, body });
+      return { id: res.data.id, value: res.data.id };
+    },
+  });
+  return { charged: true as const, subscriptionId: value, reused };
 }
 type SubscriptionChargeInlineCurrency = Extract<SubscriptionChargeItems, { price: unknown }>["price"]["unitPrice"]["currencyCode"];
+
+// ------------------------------------------------------------- payment method
 
 /**
  * Let the customer update their payment method inside your app: Paddle returns a
  * transaction (zero-value for active subscriptions; the failed one for past_due).
- * Open it with Paddle.Checkout.open({ transactionId }) or send checkout.url.
+ * Open it with openPaymentMethodCheckout (paddle-browser.ts), which uses the one-page
+ * checkout that cardless trials require, or send checkout.url.
  * Alternative without code: the customer portal's update-payment-method link.
  */
 export async function getUpdatePaymentMethodTransaction(subscriptionId: string) {

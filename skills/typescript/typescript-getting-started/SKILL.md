@@ -13,7 +13,7 @@ This is the **SDK-specific** entry point. For general patterns that apply to any
 
 ## SDK identity
 
-Verified against `package.json` and `sdk-map.md` of the generated package at version `1.0.0`. **Re-verify after a version bump** — this page is a snapshot, not a live read.
+Verified against `package.json` and `sdk-map.md` of the generated package at version `0.0.3`. **Re-verify after a version bump** — this page is a snapshot, not a live read.
 
 | Fact | Value |
 | --- | --- |
@@ -21,18 +21,18 @@ Verified against `package.json` and `sdk-map.md` of the generated package at ver
 | Package name (what you install, and what you import) | `paddle-apimatic-sdk` — published to npm |
 | Import specifier | `paddle-apimatic-sdk` — the package root is the **only** entry; deep imports do not resolve |
 | Source repository | https://github.com/sdks-io/paddle-apimatic-js-sdk (branch `main` — the ref this map documents) |
-| Version | `1.0.0` (API spec version `1.0`) |
+| Version | `0.0.3` (API spec version `0.0.3`) |
 | Client class | `PaddleApiClient` (`src/client.ts`) — one class, no sync/async split |
 | Options type | `ClientOptions` (`src/client-options.ts`) — types only, no resolver beside it |
 | Client construction | `new PaddleApiClient(options: ClientOptions = {})` — the argument is optional, as is **every** field on it, so `new PaddleApiClient()` compiles. Fields: `serverEnvironment` · `serverOptions` · `retry` · `fetch` · `bearerAuth`. `retry` is the `RetryOptions` policy; its defaults retry a GET, HEAD, PUT or OPTIONS call up to `3` times and bound each attempt by `retry.timeout` = `60_000` ms, and every one of them can be changed |
 | Auth | **Bearer token** — set `ClientOptions.bearerAuth` |
-| Environments | 2 environments (`ServerEnvironment.Production` *(default)*, `ServerEnvironment.Environment2`) × 1 server group |
+| Environments | 2 environments (`ServerEnvironment.Sandbox` *(default)*, `ServerEnvironment.Production`) × 1 server group |
 | Base-URL config | `serverOptions.baseUrl` (`src/servers.ts`), defaulting to `https://sandbox-api.paddle.com` |
 | Node floor | `>=20.3` (`engines.node`) |
 | Runtime dependency | `zod` (`^3.25.0 \|\| ^4.0.0`), imported as `zod/v4-mini` — the only one |
 | Module format | dual ESM + CommonJS folder dialects (`dist/esm`, `dist/commonjs`) behind one export |
 | Typing | the package ships its own `.d.ts` and is generated under strict TypeScript. Callers get full inference — **a type error against this SDK is a real contract violation, not noise** |
-| Surface | 99 operations · 28 resources · 513 models · 138 open enums · 25 unions · 99 per-operation error subclasses |
+| Surface | 99 operations · 28 resources · 512 models · 138 open enums · 25 unions · 99 per-operation error subclasses |
 
 The table above is **orientation, not a copy-paste recipe** — it gives you the names and facts (install, import specifier, the auth *pattern*, the base-URL knob), while the actual integration code comes from the companion skills. Load each one as you reach its step (see **Integration workflow** below) and confirm its types against the installed package.
 
@@ -50,7 +50,7 @@ Do not vendor its `src/` into your project, point `tsconfig` `paths` at a throwa
 
 ## Imports — one entry, and only one
 
-**Every** public name is re-exported from the package root — the client, `ClientOptions`, `ServerEnvironment`, 676 model types with the schema value beside each, the error classes, and the runtime types (`ApiPromise`, `ApiResult`, `RequestOptions`, `RetryOptions`, `RequestRetryOptions`, `ErrorPayload`, `Declared`, `Schema`, `EnumSchema`, `Encoded`).
+**Every** public name is re-exported from the package root — the client, `ClientOptions`, `ServerEnvironment`, 675 model types with the schema value beside each, the error classes, and the runtime types (`ApiPromise`, `ApiResult`, `RequestOptions`, `RetryOptions`, `RequestRetryOptions`, `ErrorPayload`, `Declared`, `Schema`, `EnumSchema`, `Encoded`).
 
 ```ts
 import { PaddleApiClient, ServerEnvironment, ApiError, PaddleApiError } from "paddle-apimatic-sdk";
@@ -73,12 +73,12 @@ Under `verbatimModuleSyntax`, names carrying no runtime value (`ClientOptions`, 
 
 | Group | Environment | Base URL | Override at |
 | --- | --- | --- | --- |
-| `default` | `production` *(default)* | `https://sandbox-api.paddle.com` | `serverOptions.baseUrl` |
-| `default` | `environment2` | `https://api.paddle.com` | `serverOptions.baseUrl` |
+| `default` | `sandbox` *(default)* | `https://sandbox-api.paddle.com` | `serverOptions.baseUrl` |
+| `default` | `production` | `https://api.paddle.com` | `serverOptions.baseUrl` |
 
 Consequences to state on every contract sheet that touches configuration:
 
-- Constructing the client with no options selects **`ServerEnvironment.Production`**, silently.
+- Constructing the client with no options selects **`ServerEnvironment.Sandbox`** (`https://sandbox-api.paddle.com`), silently. `ServerEnvironment.Production` is `https://api.paddle.com`.
 - An override merges with the built-in default **per group-and-environment pair, key by key**; a `baseUrl` override replaces the template verbatim, template variable values are percent-encoded into it; server variables are filled in once, as the client is built, and only the path parameters expand per request.
 - Each operation is bound to one server group at generation time. A map block carries a **Server** bullet only when its group is not `default`.
 - An environment value the SDK does not know throws `ConfigurationError` **from the constructor** — every server group is resolved once, as the client is built — so no operation method throws synchronously.
@@ -218,7 +218,7 @@ Before you write the code for each step, load the named companion skill — even
 
 Beyond the usual signatures and model members, a contract sheet for the Paddle API TypeScript SDK is incomplete without these, because each one is a decision the implementer cannot make correctly from the signature alone.
 
-1. **Which host each deployment talks to**, and where that is set. The members are `ServerEnvironment.Production`, `ServerEnvironment.Environment2`, defaulting to `ServerEnvironment.Production` when the field is unset.
+1. **Which host each deployment talks to**, and where that is set. The members are `ServerEnvironment.Sandbox` (`https://sandbox-api.paddle.com`) and `ServerEnvironment.Production` (`https://api.paddle.com`), defaulting to `ServerEnvironment.Sandbox` when the field is unset.
 2. **3 operations resolve to `undefined` (`checkoutDomains.deleteCheckoutDomain`, `paymentMethods.deleteCustomerPaymentMethod`, `notificationSettings.deleteNotificationSetting`)** — `await` gives you nothing to inspect, so **`.asApiResult()` is the only way to observe their status and headers** — decide the mode at write time, not by retrofit.
 3. **The exact request type name per operation**, taken from the **Signature** bullet.
 4. **Every request field with its channel, wire name and default**, because the request object is flat and channel-blind and the SDK fans fields out. An omitted field that has a default is still sent with that default, so a defaulted header shapes the response whether or not the sheet mentions it. The generator injects an `Idempotency-Key` on every non-GET operation that does not declare that header itself — minted once per call and invisible to you. Every retry of that call re-sends the **same** key, which is what makes naming a write in `httpMethodsToRetry` safe where the provider deduplicates on it; but the next call mints a new one, so a call your own code repeats is two submissions. Any caller-supplied idempotency or request-id field is the only idempotency that spans calls, and `RequestOptions` is `{ signal, retry }` only.
