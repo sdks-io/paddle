@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS paddle_webhook_events_pending_idx ON paddle_webhook_e
 --   customer     customer:<user>
 --   transaction  quote:<quote id>                       (custom price for a catalog product)
 --   refund       refund:<txn>:<'full' or line=amount list>
---   credit       credit:<txn>:<'full' or line=amount list>
+--   credit       credit:<txn>:<line=full|amount list> ('full' is expanded to every line)
 --   charge       charge:<sub>:<usage period or order id>
 --   discount     goodwill:<sub>:<ref>                     (one-cycle goodwill discount)
 -- (webhook destinations are not claimed: Paddle allows one per URL, so paddle-setup.ts lists, then creates)

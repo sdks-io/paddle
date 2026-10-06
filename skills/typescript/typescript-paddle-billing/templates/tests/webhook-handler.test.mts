@@ -390,4 +390,10 @@ assert.equal(store.events.get(redelivered.event_id)!.finalState, "gave_up");
 assert.deepEqual(attention.at(-1), { eventId: redelivered.event_id, state: "gave_up" });
 routeFails = false;
 
+// 19. a plan change while paused leaves the new items inactive until the resume; the mirror keeps them
+const pausedChange = subscriptionEvent("paused", "2026-10-04T21:00:00Z", { id: "sub_9" });
+pausedChange.data.items[0].status = "inactive";
+await deliver(pausedChange);
+assert.deepEqual((await store.getSubscription("sub_9"))?.priceIds, ["pri_pro_m"]);
+
 console.log("webhook-handler OK");

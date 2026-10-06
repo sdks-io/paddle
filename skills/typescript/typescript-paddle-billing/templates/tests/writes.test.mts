@@ -11,8 +11,8 @@ import { createPaddleClient, usePaddleClientForTests } from "../../server/paddle
 import type { PaddleConfig } from "../../server/paddle/config.js";
 import { OutcomeUnknownError, toHttpAnswer, writeOutcome } from "../../server/paddle/errors.js";
 import { MemoryPaddleStore } from "../../server/paddle/store.memory.js";
-import { applyDuePlanChanges, changePlan, chargeOneOff, PLAN_CHANGE_WINDOW } from "../../server/paddle/subscriptions.js";
-import { grantGoodwillDiscount, refundTransaction } from "../../server/paddle/adjustments.js";
+import { applyDuePlanChanges, changePlan, chargeOneOff, currentSubscription, PLAN_CHANGE_WINDOW } from "../../server/paddle/subscriptions.js";
+import { creditInvoice, grantGoodwillDiscount, refundTransaction } from "../../server/paddle/adjustments.js";
 import { WriteInProgressError } from "../../server/paddle/writes.js";
 
 type Json = Record<string, any>;
@@ -347,5 +347,28 @@ const createBody = sent.find((r) => r.method === "POST" && r.path === "/discount
 assert.equal(sent.filter((r) => r.method === "POST" && r.path === "/discounts").length, 1);
 assert.equal(sent.filter((r) => r.method === "PATCH").length, 1);
 assert.deepEqual([createBody?.["recur"], createBody?.["maximum_recurring_intervals"]], [true, 1]);
+
+// 14. a full credit of an invoice is sent as every line in full (Paddle takes a credit only as line items)
+const invoice: Json = { ...transaction("txn_inv", "billed", "x"), collection_mode: "manual" };
+const invoiceLines = (invoice["details"]["line_items"] as Json[]).map((l) => l["id"] as string);
+answer = (method, path) => {
+  if (method === "GET" && path === "/transactions/txn_inv") return json(200, { data: invoice, meta });
+  if (method === "POST" && path === "/adjustments") return json(201, { data: { ...adjustment("adj_c"), action: "credit", type: "partial", transaction_id: "txn_inv", status: "approved" }, meta });
+  return notFound();
+};
+sent.length = 0;
+await creditInvoice(store, "txn_inv", "written off");
+const creditBody = sent.find((r) => r.method === "POST" && r.path === "/adjustments")?.body;
+assert.equal(creditBody?.["type"], "partial");
+assert.deepEqual((creditBody?.["items"] as Json[]).map((i) => [i["item_id"], i["type"]]), invoiceLines.map((id) => [id, "full"]));
+
+// 15. on a paused subscription, items set during the pause are inactive and still its items
+const pausedSub = { ...subscription, status: "paused", items: (subscription.items as Json[]).map((i) => ({ ...i, status: "inactive" })) };
+answer = (method) => (method === "PATCH" ? "drop" : json(200, { data: pausedSub, meta }));
+const pausedNow = await currentSubscription(subscription.id);
+assert.deepEqual([pausedNow.status, pausedNow.items], ["paused", target]);
+// a change whose answer was lost counts as done when the paused subscription shows the new (inactive) items
+const pausedChange = await changePlan(subscription.id, target, "do_not_bill");
+assert.equal(pausedChange.subscription?.status, "paused");
 
 console.log("writes OK");

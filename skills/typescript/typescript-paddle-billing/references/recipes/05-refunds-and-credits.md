@@ -44,7 +44,7 @@ Recipe 04 immediate cancel issues no refund. If the policy is "pro-rata refund o
 
 ## Credits (invoices only)
 
-`creditInvoice(store, transactionId, reason)` applies to manually-collected (`collection_mode: "manual"`) transactions that are `billed` or `past_due`; crediting the full value marks the invoice `completed`. Not for card payments.
+`creditInvoice(store, transactionId, reason)` applies to manually-collected (`collection_mode: "manual"`) transactions that are `billed` or `past_due`. Paddle takes a credit only as line items, so the default `"full"` credits every line in full; pass lines to credit part of the invoice. Sandbox approves a credit at once. After a full credit the invoice's `details.totals.balance` is 0 and the customer owes nothing; in testing the status stayed `billed`, so read the balance, not the status. Not for card payments.
 
 ## Goodwill credit for a card subscription
 

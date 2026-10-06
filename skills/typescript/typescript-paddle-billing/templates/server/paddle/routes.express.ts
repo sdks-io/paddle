@@ -25,12 +25,13 @@ import {
   cancelSubscription,
   changePlan,
   chooseProrationMode,
-  currentItems,
+  currentSubscription,
   getUpdatePaymentMethodTransaction,
   PlanChangeNotSchedulableError,
   removeScheduledChange,
   requestPlanChangeAtRenewal,
 } from "./subscriptions.js";
+import { subscriptionItems } from "./webhooks/types.js";
 import { WriteInProgressError } from "./writes.js";
 
 type AuthedRequest = Request & { user: { id: string; email: string; emailVerified: boolean } };
@@ -41,20 +42,33 @@ const MAX_QUANTITY = 1000;
 class BadRequest extends Error {}
 
 /** The fields a billing page needs from a subscription, whatever shape the SDK returned. */
-function subscriptionView(sub: { id: string; status: string; nextBilledAt?: Date | null; scheduledChange?: { action: string; effectiveAt: Date } | null; items: { status?: string; price: { id: string }; quantity: number }[] }) {
+function subscriptionView(sub: { id: string; status: string; nextBilledAt?: Date | null; scheduledChange?: { action: string; effectiveAt: Date } | null; items: { status?: string | null; price: { id: string }; quantity: number }[] }) {
   return {
     id: sub.id,
     status: sub.status,
     nextBilledAt: sub.nextBilledAt ?? null,
     scheduledChange: sub.scheduledChange ? { action: sub.scheduledChange.action, effectiveAt: sub.scheduledChange.effectiveAt } : null,
-    items: sub.items.filter((i) => i.status !== "inactive").map((i) => ({ priceId: i.price.id, quantity: i.quantity })),
+    items: subscriptionItems(sub).map((i) => ({ priceId: i.price.id, quantity: i.quantity })),
   };
 }
 
 type Totals = { details: { totals: { grandTotal: string; currencyCode: string } } } | null | undefined;
+type UpdateSummary = { result: { action: string; amount: string; currencyCode: string } } | null | undefined;
 const totalsView = (t: Totals) => (t ? { total: t.details.totals.grandTotal, currency: t.details.totals.currencyCode } : null);
-function previewView(p: { immediateTransaction?: Totals; nextTransaction?: Totals; nextBilledAt?: Date | null } | undefined) {
-  return p ? { chargeNow: totalsView(p.immediateTransaction), nextBill: totalsView(p.nextTransaction), nextBilledAt: p.nextBilledAt ?? null } : null;
+/**
+ * What the customer sees before confirming. `change` is Paddle's summary of this change alone: a charge, or a
+ * credit (a downgrade's unused time), which Paddle keeps on the customer's balance for later bills. The bills'
+ * totals are what is due after that balance, so a credit never shows in them.
+ */
+function previewView(p: { immediateTransaction?: Totals; nextTransaction?: Totals; nextBilledAt?: Date | null; updateSummary?: UpdateSummary } | undefined) {
+  if (!p) return null;
+  const result = p.updateSummary?.result;
+  return {
+    change: result ? { action: result.action, amount: result.amount, currency: result.currencyCode } : null,
+    chargeNow: totalsView(p.immediateTransaction),
+    nextBill: totalsView(p.nextTransaction),
+    nextBilledAt: p.nextBilledAt ?? null,
+  };
 }
 
 export function billingRoutes(store: PaddleStore): Router {
@@ -88,21 +102,24 @@ export function billingRoutes(store: PaddleStore): Router {
     return q;
   }
 
-  /** The complete item list after replacing the base plan (the first catalog item); add-ons keep their quantities. */
-  async function itemsWithNewBase(row: SubscriptionRow, priceId: string, quantity: number) {
-    const items = await currentItems(row.id);
-    let replaced = false;
-    const out: { priceId: string; quantity: number }[] = [];
-    for (const item of items) {
-      if (!replaced && (await store.getPlanByPriceId(item.priceId))) {
-        out.push({ priceId, quantity });
-        replaced = true;
-      } else {
-        out.push(item);
+  /**
+   * The change read against Paddle's current state (the mirror can lag the previous change by a webhook):
+   * the current base plan (the first catalog item), the quantity (the request's, or the current one), and the
+   * complete item list with the base plan replaced; add-ons keep their quantities.
+   */
+  async function planChange(row: SubscriptionRow, priceId: string, requestedQuantity: unknown) {
+    const now = await currentSubscription(row.id);
+    let base: { priceId: string; quantity: number } | undefined;
+    for (const item of now.items) {
+      if (await store.getPlanByPriceId(item.priceId)) {
+        base = item;
+        break;
       }
     }
-    if (!replaced) throw new BadRequest("subscription has no catalog plan to replace");
-    return out;
+    if (!base) throw new BadRequest("subscription has no catalog plan to replace");
+    const quantity = boundedQuantity(requestedQuantity, base.quantity);
+    const items = now.items.map((item) => (item === base ? { priceId, quantity } : item));
+    return { status: now.status, base, quantity, items };
   }
 
   const ensureUserCustomer = (req: AuthedRequest) => ensureCustomer(store, req.user.id, req.user.email, { emailVerified: req.user.emailVerified });
@@ -119,8 +136,10 @@ export function billingRoutes(store: PaddleStore): Router {
   }));
 
   // READ (Paddle): active prices for the pricing page. Cache for a few minutes in production.
+  // Only this app's plans: the Paddle account can hold other products and prices.
   r.get("/catalog", wrap(async (_req, res) => {
-    const prices = await listCatalog({ recurring: true });
+    const sold = new Set((await store.listPlans()).filter((p) => p.active).map((p) => p.priceId));
+    const prices = (await listCatalog({ recurring: true })).filter((p) => sold.has(p.id));
     res.json(prices.map((p) => ({ priceId: p.id, productId: p.productId, name: p.name ?? null, productName: p.product?.name ?? null, amount: p.unitPrice.amount, currency: p.unitPrice.currencyCode, billingCycle: p.billingCycle ?? null, trial: p.trialPeriod ?? null })));
   }));
 
@@ -157,11 +176,8 @@ export function billingRoutes(store: PaddleStore): Router {
     const row = await ownSubscription(req);
     const body = req.body as { priceId?: unknown; quantity?: unknown; preview?: unknown };
     const priceId = await catalogPrice(body.priceId);
-    const quantity = boundedQuantity(body.quantity, row.quantity);
-    const currentPriceId = row.priceIds[0];
-    if (!currentPriceId) return res.status(409).json({ error: "subscription has no active item" });
-    const items = await itemsWithNewBase(row, priceId, quantity);
-    const mode = await chooseProrationMode({ status: row.status, priceId: currentPriceId, quantity: row.quantity }, { priceId, quantity });
+    const { status, base, quantity, items } = await planChange(row, priceId, body.quantity);
+    const mode = await chooseProrationMode({ status, priceId: base.priceId, quantity: base.quantity }, { priceId, quantity });
     if (body.preview === true) {
       const preview = (await changePlan(row.id, items, mode, { preview: true })).preview;
       return res.json({ preview: previewView(preview) });
@@ -188,8 +204,8 @@ export function billingRoutes(store: PaddleStore): Router {
     const row = await ownSubscription(req);
     const body = req.body as { priceId?: unknown; quantity?: unknown };
     const priceId = await catalogPrice(body.priceId);
-    const quantity = boundedQuantity(body.quantity, row.quantity);
-    const change = await requestPlanChangeAtRenewal(store, { subscriptionId: row.id, userId: req.user.id, items: await itemsWithNewBase(row, priceId, quantity) });
+    const { items } = await planChange(row, priceId, body.quantity);
+    const change = await requestPlanChangeAtRenewal(store, { subscriptionId: row.id, userId: req.user.id, items });
     res.json({ items: change.items, at: change.renewalAt });
   }));
 

@@ -28,7 +28,7 @@
 import { getPaddleClient } from "../client.js";
 import type { PaddleConfig } from "../config.js";
 import type { EventFinalState, PaddleStore, PurchaseItem, PurchaseRow, SubscriptionRow } from "../store.js";
-import { decodeEnvelope, decodeEvent, type AdjustmentEvent, type DecodedEvent, type SubscriptionEvent, type WebhookAdjustment, type WebhookTransaction } from "./types.js";
+import { decodeEnvelope, decodeEvent, subscriptionItems, type AdjustmentEvent, type DecodedEvent, type SubscriptionEvent, type WebhookAdjustment, type WebhookTransaction } from "./types.js";
 import { verifyPaddleSignature } from "./verify.js";
 
 export interface WebhookHooks {
@@ -261,7 +261,7 @@ export class PaddleWebhookHandler {
     const userId = (await this.resolveUserId(sub.customData, sub.customerId)) ?? existing?.userId ?? null;
     if (userId) await this.linkCustomerOnce(userId, sub.customerId);
 
-    const activeItems = sub.items.filter((i) => i.status !== "inactive");
+    const activeItems = subscriptionItems(sub);
     const row: SubscriptionRow = {
       id: sub.id,
       userId,

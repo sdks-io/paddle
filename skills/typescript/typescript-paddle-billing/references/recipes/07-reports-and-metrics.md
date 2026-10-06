@@ -23,11 +23,11 @@ Needs: report type and filters. Produces: a download URL valid for 3 minutes.
 const url = await generateReportCsv(transactionsReport("2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z"));
 ```
 
-Types: `transactions`, `transaction_line_items`, `adjustments`, `adjustment_line_items`, `products_prices`, `discounts`, `payout_reconciliation`, `checkouts` (`balance` is deprecated; use `payout_reconciliation`). Reports are asynchronous (`pending → ready`), one at a time, 100 per 24 hours; default range is the previous month. Stream the CSV to the owner immediately; do not store the URL.
+Types: `transactions`, `transaction_line_items`, `adjustments`, `adjustment_line_items`, `products_prices`, `discounts`, `payout_reconciliation`, `checkouts` (`balance` is deprecated; use `payout_reconciliation`). Reports are asynchronous (`pending → ready`; about a minute in testing), one at a time, 100 per 24 hours; default range is the previous month. Stream the CSV to the owner immediately; do not store the URL.
 
 ## Transactions and invoices per customer (support view)
 
-`client.transactions.listTransactions` filtered by the customer and, when needed, by status; at most 30 per page (page with `listAll`); include `adjustments` to show refunds (fields: `map/operations/transactions.md`). Invoice PDF per transaction: `getInvoiceUrl`. Subscription history (who changed what): `client.subscriptionHistoryApi.listSubscriptionHistory` (fields: `map/operations/subscription-history-api.md`).
+`client.transactions.listTransactions` filtered by the customer and, when needed, by status; at most 30 per page (page with `listAll`); include `adjustments` to show refunds (fields: `map/operations/transactions.md`). Invoice PDF per transaction: `getInvoiceUrl`. Subscription history (who changed what): `client.subscriptionHistoryApi.listSubscriptionHistory({ subscriptionId, orderBy: "id[DESC]" })` (Paddle sorts history only by `id`; fields: `map/operations/subscription-history-api.md`).
 
 ## Where the owner looks instead
 

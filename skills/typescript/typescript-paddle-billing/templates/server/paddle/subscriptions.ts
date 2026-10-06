@@ -32,6 +32,7 @@ import type {
 import { getPaddleClient } from "./client.js";
 import { OutcomeUnknownError, writeOutcome } from "./errors.js";
 import type { PaddleStore, PendingPlanChange } from "./store.js";
+import { subscriptionItems } from "./webhooks/types.js";
 import { claimedWrite, LOOKUP_MARGIN_MS } from "./writes.js";
 
 type Subscription = Awaited<ReturnType<typeof readSubscription>>;
@@ -58,7 +59,7 @@ async function settledUpdate<T>(operation: string, subscriptionId: string, updat
 }
 
 const sameItems = (sub: Subscription, items: { priceId: string; quantity?: number }[]) => {
-  const active = sub.items.filter((i) => i.status !== "inactive");
+  const active = subscriptionItems(sub);
   return (
     active.length === items.length &&
     items.every((want) => active.some((have) => have.price.id === want.priceId && (want.quantity === undefined || have.quantity === want.quantity)))
@@ -74,10 +75,18 @@ export async function getSubscriptionWithNext(subscriptionId: string) {
   return res.data;
 }
 
-/** The subscription's active items as the complete list an update needs (base plan and add-ons). */
-export async function currentItems(subscriptionId: string): Promise<{ priceId: string; quantity: number }[]> {
+/**
+ * Status and items as Paddle has them now: the complete item list an update needs (base plan and add-ons).
+ * Decide a change from this, not from the mirror: the mirror follows a change only when its webhook arrives.
+ */
+export async function currentSubscription(subscriptionId: string): Promise<{ status: SubscriptionStatus; items: { priceId: string; quantity: number }[] }> {
   const sub = await readSubscription(subscriptionId);
-  return sub.items.filter((i) => i.status !== "inactive").map((i) => ({ priceId: i.price.id, quantity: i.quantity }));
+  return { status: sub.status, items: subscriptionItems(sub).map((i) => ({ priceId: i.price.id, quantity: i.quantity })) };
+}
+
+/** The subscription's items as the complete list an update needs (base plan and add-ons). */
+export async function currentItems(subscriptionId: string): Promise<{ priceId: string; quantity: number }[]> {
+  return (await currentSubscription(subscriptionId)).items;
 }
 
 /**
@@ -250,7 +259,7 @@ export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Da
         continue;
       }
       const target = change.items[0];
-      const currentPrice = sub.items.find((i) => i.status !== "inactive")?.price;
+      const currentPrice = subscriptionItems(sub)[0]?.price;
       if (!target || !currentPrice) {
         await skip("no items to compare", true);
         continue;

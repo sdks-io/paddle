@@ -14,7 +14,7 @@
  *   Card (automatically-collected) transactions cannot be credited, and the app cannot add to a
  *   customer's credit balance: Paddle fills it only from prorations. Goodwill for a card
  *   subscription is a refund of part of a paid transaction, or grantGoodwillDiscount below.
- * - type full adjusts the grand total; partial needs items with the transaction's
+ * - type full adjusts the grand total (refunds only: a credit always lists its items); partial needs items with the transaction's
  *   line item ids (txnitm_...) from details.line_items[].id.
  * - A transaction with a pending refund cannot be adjusted again.
  * - Refunding does not cancel a subscription; cancel separately if wanted.
@@ -41,6 +41,11 @@ async function adjust(
   userId: string | null,
 ) {
   const client = getPaddleClient();
+  if (action === "credit" && scope === "full") {
+    // Paddle accepts a credit only as line items: "full" credits every line in full.
+    const tx = await client.transactions.getTransaction({ transactionId });
+    scope = tx.data.details.lineItems.map((l) => ({ lineItemId: l.id, full: true }));
+  }
   const items: AdjustmentItemCreate[] | undefined =
     scope === "full" ? undefined : scope.map((i) => (i.full ? { itemId: i.lineItemId, type: "full" } : { itemId: i.lineItemId, type: "partial", ...(i.amount ? { amount: i.amount } : {}) }));
   // The adjustment this call would create: same lines with the same type and amount (or a full adjustment).
@@ -85,7 +90,10 @@ export async function refundTransaction(store: PaddleStore, transactionId: strin
   return adjust(store, "refund", transactionId, reason, scope, userId);
 }
 
-/** Credit against a billed invoice (manual collection only). Crediting the full value marks the invoice completed. */
+/**
+ * Credit against a billed invoice (manual collection only). Sent as line items: "full" credits every line in full.
+ * After a full credit the invoice's details.totals.balance is 0; read the balance, not the status (it can stay billed).
+ */
 export async function creditInvoice(store: PaddleStore, transactionId: string, reason: string, scope: AdjustmentScope = "full") {
   return adjust(store, "credit", transactionId, reason, scope, null);
 }

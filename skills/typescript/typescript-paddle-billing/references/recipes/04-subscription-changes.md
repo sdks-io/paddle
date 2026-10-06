@@ -8,11 +8,12 @@ Paddle constraints that apply to every change: no change within 30 minutes of `n
 
 ## Upgrade or downgrade (change plan)
 
-Needs: `sub_…`, current items (from the row or `getSubscriptionWithNext`), target `pri_…`. Produces: a new plan, optional immediate transaction.
+Needs: `sub_…`, current status and items (`currentSubscription`), target `pri_…`. Produces: a new plan, optional immediate transaction.
 
-1. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
-2. Preview so the customer sees the money: `changePlan(subId, items, mode, { preview: true })`, where `items` is the complete list with the base plan replaced (`currentItems(subId)`, then swap the base item; `routes.express.ts` does this). Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
-3. Apply with the same arguments without `preview`.
+1. Read the subscription from Paddle: `currentSubscription(subId)` gives the status and the complete item list. Do not decide from the mirror row: it follows a change only when the change's webhook arrives, and a second change seconds after the first would be decided against the old plan.
+2. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
+3. Preview so the customer sees the money: `changePlan(subId, items, mode, { preview: true })`, where `items` is the complete list with the base plan replaced (`routes.express.ts` does this). Show `preview.updateSummary.result` (`action` `charge` or `credit`, and the amount: Paddle's summary of this change) and the totals of `preview.immediateTransaction` (due now) and `preview.nextTransaction` (next bill). A downgrade's credit goes to the customer's credit balance, so it shows only in the summary, never as a negative bill.
+4. Apply with the same arguments without `preview`.
 
 Choosing `mode` (`proration_billing_mode`):
 
@@ -26,7 +27,7 @@ Choosing `mode` (`proration_billing_mode`):
 | Free change (goodwill) | `do_not_bill` | no charge, no credit; the owner's decision, never from a customer request |
 | Change at the end of the term (e.g. yearly → monthly, or a downgrade the customer keeps paying the higher tier for until renewal) | none now | `requestPlanChangeAtRenewal`; see "Change at the end of the term" |
 
-Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]` (`routes.express.ts` reads the current items with `currentItems` and replaces only the base plan). Credits larger than the charge are added to the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, Paddle's default (`on_payment_failure: "prevent_change"`) keeps the old plan; tell the customer to update the payment method. `changePlan` sends `on_payment_failure` only when called with `applyEvenIfPaymentFails`.
+Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]` (`routes.express.ts` reads the current items with `currentSubscription` and replaces only the base plan). Credits larger than the charge are added to the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, Paddle's default (`on_payment_failure: "prevent_change"`) keeps the old plan; tell the customer to update the payment method. `changePlan` sends `on_payment_failure` only when called with `applyEvenIfPaymentFails`.
 
 ## Change at the end of the term
 
@@ -61,7 +62,8 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 
 - `pauseSubscription(subId)` → scheduled at the end of the period (`scheduled_change.action = "pause"`); `{ when: "immediately" }` pauses now. Add `resumeAt` for an automatic resume. `onResume` decides whether resume starts a new billing period (default; charges on resume) or continues the paused one.
 - `resumeSubscription(subId)` resumes now and charges when a new period starts; `resumeSubscription(subId, date)` schedules it. Resuming needs a payment method on file.
-- Access while paused: none by default (entitlement), or read-only if the user prefers; `current_billing_period` is null while paused and canceled; read `next_billed_at` from the payload rather than assuming it.
+- Access while paused: none by default (entitlement), or read-only if the user prefers; decide from `status`, not from `current_billing_period` (in testing a subscription paused at once kept the period it was paused in); `next_billed_at` is the resume date when one is set; read it from the payload rather than assuming it.
+- A plan change while paused (`do_not_bill`) leaves the new items `inactive` until the subscription resumes; they are still its items (`subscriptionItems` in `webhooks/types.ts` keeps them for a paused subscription).
 
 ## Payment method update and past_due
 
@@ -74,7 +76,7 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 
 ## Discounts on an existing subscription
 
-`client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`); remove it with `discount: null` (or in the dashboard). See recipe 06 for creating discounts.
+`client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`); remove it with `discount: null` (or in the dashboard). A plan change to items a restricted discount (`restrict_to`) does not cover removes the discount from the subscription, and changing back does not restore it (seen in testing); warn the customer in the preview step when their discount would end. See recipe 06 for creating discounts.
 
 ## Checks
 
