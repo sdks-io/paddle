@@ -253,11 +253,4 @@ export class MemoryPaddleStore implements PaddleStore {
     c.applyAfter = applyAfter;
     return true;
   }
-  async reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string) {
-    const c = this.planChanges.get(subscriptionId);
-    if (!c || c.canceledAt !== null || c.appliedAt?.getTime() !== appliedAt.getTime()) return false;
-    c.appliedAt = null;
-    c.note = note;
-    return true;
-  }
 }

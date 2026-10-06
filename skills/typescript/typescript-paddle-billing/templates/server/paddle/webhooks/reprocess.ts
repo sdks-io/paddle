@@ -45,7 +45,8 @@ export async function reprocessPendingEvents(handler: PaddleWebhookHandler, stor
   const tried = new Set<string>();
   for (let i = 0; i < (options.limit ?? 100); i++) {
     const [event] = await store.leasePendingEvents({ maxAttempts, limit: 1, leaseMs });
-    if (!event || tried.has(event.eventId)) break; // each event at most once per run
+    if (!event) break;
+    if (tried.has(event.eventId)) continue; // each event at most once per run; the limit bounds the loop
     tried.add(event.eventId);
     try {
       const result = await handler.process(event.payload);

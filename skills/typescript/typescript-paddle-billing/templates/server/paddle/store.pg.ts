@@ -377,14 +377,6 @@ export class PgPaddleStore implements PaddleStore {
     return r.rowCount === 1;
   }
 
-  async reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string) {
-    const r = await this.pool.query(
-      `UPDATE paddle_pending_plan_changes SET applied_at = NULL, note = $3
-       WHERE subscription_id = $1 AND canceled_at IS NULL AND abs(extract(epoch FROM applied_at - $2::timestamptz)) < 0.001`,
-      [subscriptionId, appliedAt, note],
-    );
-    return r.rowCount === 1;
-  }
 
   // ------------------------------------------------------------- helpers
 

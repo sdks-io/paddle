@@ -10,9 +10,9 @@ import { createCheckoutTransaction, checkoutClaimKey } from "../../server/paddle
 import { createPaddleClient, usePaddleClientForTests } from "../../server/paddle/client.js";
 import type { PaddleConfig } from "../../server/paddle/config.js";
 import { OutcomeUnknownError, toHttpAnswer, writeOutcome } from "../../server/paddle/errors.js";
-import { refundTransaction } from "../../server/paddle/adjustments.js";
 import { MemoryPaddleStore } from "../../server/paddle/store.memory.js";
-import { changePlan, chargeOneOff } from "../../server/paddle/subscriptions.js";
+import { applyDuePlanChanges, changePlan, chargeOneOff, PLAN_CHANGE_WINDOW } from "../../server/paddle/subscriptions.js";
+import { grantGoodwillDiscount, refundTransaction } from "../../server/paddle/adjustments.js";
 import { WriteInProgressError } from "../../server/paddle/writes.js";
 
 type Json = Record<string, any>;
@@ -227,5 +227,125 @@ const unknownChange = await changePlan(subscription.id, [{ priceId: "pri_other",
 assert.ok(unknownChange instanceof OutcomeUnknownError);
 // no on_payment_failure is sent unless the caller asked for it
 assert.equal(sent.filter((r) => r.method === "PATCH").every((r) => r.body?.["on_payment_failure"] === undefined), true);
+
+// 10. a dropped immediate charge is not settled with a new charge another claim already recorded
+const listPage = (data: unknown[]) => json(200, { data, meta: { ...meta, pagination: { per_page: 30, next: "https://x/transactions", has_more: false, estimated_total: data.length } } });
+const freshCharge = (id: string) => ({ ...chargeTxn(id), created_at: new Date().toISOString() });
+const notFound = () => json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
+await store.claimWrite(`charge:${subscription.id}:order-A`, "charge", null);
+await store.completeClaim(`charge:${subscription.id}:order-A`, "txn_charge_A");
+let listCalls = 0;
+answer = (method, path) => {
+  if (method === "GET" && path === "/transactions") return listCalls++ === 0 ? listPage([]) : listPage([freshCharge("txn_charge_A")]);
+  if (method === "POST" && path.endsWith("/charge")) return "drop";
+  return notFound();
+};
+const notMine = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "immediately", { ref: "order-C" }).catch((e: unknown) => e);
+assert.ok(notMine instanceof OutcomeUnknownError, "another claim's charge must not settle this one");
+// ... nor with a charge that already existed before the write (made in the dashboard, or before claims were kept)
+answer = (method, path) => {
+  if (method === "GET" && path === "/transactions") return listPage([freshCharge("txn_charge_old")]);
+  if (method === "POST" && path.endsWith("/charge")) return "drop";
+  return notFound();
+};
+const preExisting = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "immediately", { ref: "order-F" }).catch((e: unknown) => e);
+assert.ok(preExisting instanceof OutcomeUnknownError, "a charge from before the write must not settle it");
+// ... while a dropped charge whose own new transaction appears is settled with that transaction
+answer = (method, path) => {
+  if (method === "GET" && path === "/transactions") return listCalls++ === 0 ? listPage([]) : listPage([freshCharge("txn_charge_E")]);
+  if (method === "POST" && path.endsWith("/charge")) return "drop";
+  return notFound();
+};
+listCalls = 0;
+const chargeE = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "immediately", { ref: "order-E" });
+assert.equal(chargeE.subscriptionId, subscription.id);
+assert.equal(store.claims.get(`charge:${subscription.id}:order-E`)?.resultId, "txn_charge_E");
+
+// 11. a next-period charge records a result unique to it (its claim key), never the subscription id
+const txnDetails = fixture("sandbox-transaction-completed").data.details;
+const withNext = (lines: string[]) => ({
+  ...subscription,
+  next_transaction: {
+    billing_period: { starts_at: "2026-11-01T00:00:00Z", ends_at: "2026-12-01T00:00:00Z" },
+    details: { ...txnDetails, line_items: lines.map((priceId, i) => ({ ...txnDetails.line_items[0], id: `txnitm_n${i}`, price_id: priceId })) },
+  },
+});
+let nextCalls = 0;
+answer = (method, path) => {
+  if (method === "GET" && path === `/subscriptions/${subscription.id}`) return json(200, { data: nextCalls++ === 0 ? withNext(["pri_overage"]) : withNext(["pri_overage", "pri_overage"]), meta });
+  if (method === "POST" && path.endsWith("/charge")) return "drop";
+  return notFound();
+};
+await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 1 }], "next_billing_period", { ref: "usage:2026-11" });
+assert.equal(store.claims.get(`charge:${subscription.id}:usage:2026-11`)?.resultId, `charge:${subscription.id}:usage:2026-11`);
+assert.equal(await store.isClaimResult(subscription.id), false);
+
+// 12. the end-of-term job: a cycle change is applied with full_immediately; a change already in effect is only closed
+const renewal = new Date(Date.now() + 60 * 60_000); // inside the window (2 h .. 35 min before)
+const subWith = (priceId: string, interval: string) => ({
+  ...subscription,
+  status: "active",
+  scheduled_change: null,
+  next_billed_at: renewal.toISOString(),
+  items: [{ ...subscription.items[0], status: "active", quantity: 1, price: { ...subscription.items[0].price, id: priceId, billing_cycle: { interval, frequency: 1 } } }],
+});
+const priceOf = (id: string, interval: string) => ({ ...subscription.items[0].price, id, billing_cycle: { interval, frequency: 1 } });
+let current = subWith("pri_yearly", "year");
+answer = (method, path, body) => {
+  if (method === "GET" && path === `/subscriptions/${subscription.id}`) return json(200, { data: current, meta });
+  if (method === "GET" && path === "/prices/pri_monthly") return json(200, { data: priceOf("pri_monthly", "month"), meta });
+  if (method === "PATCH") {
+    current = subWith((body?.["items"] as { price_id: string }[])[0]!.price_id, "month");
+    return json(200, { data: current, meta });
+  }
+  return notFound();
+};
+await store.savePendingPlanChange({
+  subscriptionId: subscription.id, userId: "u1", items: [{ priceId: "pri_monthly", quantity: 1 }], renewalAt: renewal,
+  applyAfter: new Date(renewal.getTime() - PLAN_CHANGE_WINDOW.startBeforeRenewalMs), requestedAt: new Date(), appliedAt: null, canceledAt: null, note: null,
+});
+sent.length = 0;
+const run1 = await applyDuePlanChanges(store);
+assert.deepEqual(run1.applied, [subscription.id]);
+assert.equal(sent.find((r) => r.method === "PATCH")?.body?.["proration_billing_mode"], "full_immediately");
+assert.equal(store.planChanges.get(subscription.id)?.note, "applied with full_immediately");
+// a change whose answer was lost: the next run finds it in effect and closes it without a second PATCH
+await store.savePendingPlanChange({ ...store.planChanges.get(subscription.id)!, appliedAt: null, note: null });
+sent.length = 0;
+const run2 = await applyDuePlanChanges(store);
+assert.deepEqual(run2.applied, [subscription.id]);
+assert.equal(sent.filter((r) => r.method === "PATCH").length, 0);
+assert.equal(store.planChanges.get(subscription.id)?.note, "already in effect");
+
+// 13. goodwill: created and applied once; a repeat with the same ref does nothing
+const goodwill = {
+  id: "dsc_gw", status: "active", description: "Sorry", enabled_for_checkout: false, code: "GWX", type: "flat", mode: "standard", amount: "200",
+  currency_code: "USD", recur: true, maximum_recurring_intervals: 1, usage_limit: null, restrict_to: null, expires_at: null, times_used: 0,
+  created_at: new Date().toISOString(), updated_at: new Date().toISOString(), custom_data: null, import_meta: null, discount_group_id: null,
+};
+let discountCreated = false;
+let subDiscount: unknown = null;
+answer = (method, path) => {
+  if (method === "GET" && path === `/subscriptions/${subscription.id}`) return json(200, { data: { ...subscription, discount: subDiscount }, meta });
+  if (method === "GET" && path === "/discounts") return listPage(discountCreated ? [goodwill] : []);
+  if (method === "POST" && path === "/discounts") {
+    discountCreated = true;
+    return json(201, { data: goodwill, meta });
+  }
+  if (method === "PATCH") {
+    subDiscount = { id: goodwill.id, starts_at: "2026-11-01T00:00:00Z", ends_at: "2026-12-01T00:00:00Z", type: "recurring" };
+    return json(200, { data: { ...subscription, discount: subDiscount }, meta });
+  }
+  return notFound();
+};
+sent.length = 0;
+const g1 = await grantGoodwillDiscount(store, { subscriptionId: subscription.id, amount: "200", currencyCode: "USD", description: "Sorry", ref: "t-1" });
+const g2 = await grantGoodwillDiscount(store, { subscriptionId: subscription.id, amount: "200", currencyCode: "USD", description: "Sorry", ref: "t-1" });
+assert.equal(g1.alreadyGranted, false);
+assert.equal(g2.alreadyGranted, true);
+const createBody = sent.find((r) => r.method === "POST" && r.path === "/discounts")?.body;
+assert.equal(sent.filter((r) => r.method === "POST" && r.path === "/discounts").length, 1);
+assert.equal(sent.filter((r) => r.method === "PATCH").length, 1);
+assert.deepEqual([createBody?.["recur"], createBody?.["maximum_recurring_intervals"]], [true, 1]);
 
 console.log("writes OK");

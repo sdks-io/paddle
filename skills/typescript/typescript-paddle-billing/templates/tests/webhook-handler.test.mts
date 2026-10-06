@@ -139,7 +139,7 @@ function adjustmentEvent(opts: { transactionId: string; status: string; action?:
       action: opts.action ?? "refund",
       type: full ? "full" : "partial",
       transaction_id: opts.transactionId,
-      subscription_id: null,
+      subscription_id: null as string | null,
       customer_id: "ctm_1",
       reason: "test",
       currency_code: "USD",
@@ -361,5 +361,33 @@ assert.equal((await store.getPurchase("txn_anon"))?.userId, null);
 await store.linkCustomer("user_55", "ctm_anon", "buyer@example.test");
 assert.equal(await store.assignUserToCustomerRows("user_55", "ctm_anon"), 1);
 assert.equal(await hasPurchased(store, "user_55", "pro_lifetime"), true);
+
+// 17. a refund of a subscription checkout's one-time item, arriving while only the subscription row exists, is retried
+paddleTransactions.set("txn_mixed_early", {
+  origin: "web",
+  items: [
+    { priceId: "pri_pro_m", productId: "pro_pro", recurring: true },
+    { priceId: "pri_credits", productId: "pro_credits", recurring: false },
+  ],
+});
+const mixedEarly = { ...adjustmentEvent({ transactionId: "txn_mixed_early", status: "approved", lineItemIds: "full" }) };
+mixedEarly.data.subscription_id = "sub_1"; // the subscription is already mirrored, the purchase row is not
+await assert.rejects(deliver(mixedEarly), /not recorded yet/);
+
+// 18. an event that ran out of attempts through Paddle's redeliveries alone (the route failed each time) is parked and reported
+let routeFails = true;
+const routeHandler = new PaddleWebhookHandler(config, store, {
+  ...hooks,
+  async onSubscriptionChanged() {
+    if (routeFails) throw new Error("hook down");
+  },
+}, undefined, options);
+const redelivered = subscriptionEvent("active", "2026-10-04T20:00:00Z", { id: "sub_8" });
+for (let i = 0; i < 3; i++) await assert.rejects(deliver(redelivered, routeHandler));
+const parkedReport = await reprocessPendingEvents(routeHandler, store, { maxAttempts: 3, leaseMs: 0 });
+assert.equal(parkedReport.gaveUp, 1);
+assert.equal(store.events.get(redelivered.event_id)!.finalState, "gave_up");
+assert.deepEqual(attention.at(-1), { eventId: redelivered.event_id, state: "gave_up" });
+routeFails = false;
 
 console.log("webhook-handler OK");

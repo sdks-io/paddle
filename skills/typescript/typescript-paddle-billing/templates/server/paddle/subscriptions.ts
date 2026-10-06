@@ -32,7 +32,7 @@ import type {
 import { getPaddleClient } from "./client.js";
 import { OutcomeUnknownError, writeOutcome } from "./errors.js";
 import type { PaddleStore, PendingPlanChange } from "./store.js";
-import { claimedWrite } from "./writes.js";
+import { claimedWrite, LOOKUP_MARGIN_MS } from "./writes.js";
 
 type Subscription = Awaited<ReturnType<typeof readSubscription>>;
 
@@ -223,6 +223,12 @@ export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Da
     };
     try {
       const sub = await readSubscription(change.subscriptionId);
+      if (sameItems(sub, change.items)) {
+        // Already in effect (an earlier run whose answer was lost, or the same change made another way).
+        await store.finishPendingPlanChange(change.subscriptionId, "applied", now, "already in effect");
+        result.applied.push(change.subscriptionId);
+        continue;
+      }
       if (sub.status !== "active") {
         await skip(`subscription is ${sub.status}`, true);
         continue;
@@ -251,18 +257,14 @@ export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Da
       }
       const targetPrice = (await getPaddleClient().prices.getPrice({ priceId: target.priceId })).data;
       const mode: ProrationBillingMode = cycleOf(currentPrice) === cycleOf(targetPrice) ? "do_not_bill" : "full_immediately";
-      // Close the change before calling Paddle, so a cancel (or a change applied now) after this point cannot be undone by it.
-      const appliedAt = new Date();
-      if (!(await store.finishPendingPlanChange(change.subscriptionId, "applied", appliedAt, `applied with ${mode}`))) {
+      // Still wanted? The customer may have canceled it, or made a change now (the route cancels this one first).
+      if (!(await store.getPendingPlanChange(change.subscriptionId))) {
         result.skipped.push({ subscriptionId: change.subscriptionId, reason: "canceled meanwhile" });
         continue;
       }
-      try {
-        await changePlan(change.subscriptionId, change.items, mode);
-      } catch (err) {
-        await store.reopenPendingPlanChange(change.subscriptionId, appliedAt, `applying failed: ${err instanceof Error ? err.message : String(err)}`);
-        throw err;
-      }
+      await changePlan(change.subscriptionId, change.items, mode);
+      // Closed only once Paddle confirmed; if the answer is lost, the next run finds the items in effect and closes it.
+      await store.finishPendingPlanChange(change.subscriptionId, "applied", new Date(), `applied with ${mode}`);
       result.applied.push(change.subscriptionId);
     } catch (err) {
       // Left open: the next run tries again while the window lasts. Log it.
@@ -424,34 +426,45 @@ export async function chargeOneOff(
   let linesBefore: number | undefined;
   let chargesBefore: Set<string> | undefined;
 
-  const { value, reused } = await claimedWrite(store, {
-    claimKey: `charge:${subscriptionId}:${options.ref}`,
+  const claimKey = `charge:${subscriptionId}:${options.ref}`;
+  const newCharges = async (since: Date) => {
+    const before = chargesBefore ?? new Set<string>();
+    return (await chargeTransactions()).filter(
+      (t) => !before.has(t.id) && t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))),
+    );
+  };
+  // The claim records an id unique to this charge: its transaction (immediate), or the claim key itself
+  // (next period, where the charge is only a line on the coming invoice). Never the subscription id,
+  // which every charge on the subscription shares.
+  const { reused } = await claimedWrite(store, {
+    claimKey,
     kind: "charge",
     userId: null,
     operation: "createSubscriptionCharge",
-    reuse: async (id) => id,
+    reuse: async () => subscriptionId,
     absenceIsProof: false,
     find: async (since) => {
       if (when === "immediately") {
-        if (chargesBefore === undefined) return undefined;
-        const before = chargesBefore;
-        const hit = (await chargeTransactions()).find(
-          (t) => !before.has(t.id) && t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))),
-        );
-        return hit ? { id: hit.id, value: subscriptionId } : undefined;
+        if (chargesBefore === undefined) return undefined; // nothing to compare with: cannot tell
+        // Settle only when exactly one new matching charge exists; two mean another ref charged the same items meanwhile.
+        const fresh = await newCharges(since);
+        return fresh.length === 1 && fresh[0] ? { id: fresh[0].id, value: subscriptionId } : undefined;
       }
       if (linesBefore === undefined) return undefined; // nothing to compare with: cannot tell
       const after = (await nextLines()).filter(isChargeLine).length;
-      return after - linesBefore >= items.length ? { id: subscriptionId, value: subscriptionId } : undefined;
+      return after - linesBefore === items.length ? { id: claimKey, value: subscriptionId } : undefined;
     },
     write: async () => {
       if (when === "next_billing_period") linesBefore = (await nextLines()).filter(isChargeLine).length;
       else chargesBefore = new Set((await chargeTransactions()).map((t) => t.id));
       const res = await client.subscriptions.createSubscriptionCharge({ subscriptionId, body });
-      return { id: res.data.id, value: res.data.id };
+      if (when === "next_billing_period") return { id: claimKey, value: subscriptionId };
+      // The response is the subscription; record the charge's own transaction when it can be told apart.
+      const fresh = await newCharges(new Date(Date.now() - LOOKUP_MARGIN_MS)).catch(() => []);
+      return { id: fresh.length === 1 && fresh[0] ? fresh[0].id : claimKey, value: res.data.id };
     },
   });
-  return { charged: true as const, subscriptionId: value, reused };
+  return { charged: true as const, subscriptionId, reused };
 }
 type SubscriptionChargeInlineCurrency = Extract<SubscriptionChargeItems, { price: unknown }>["price"]["unitPrice"]["currencyCode"];
 

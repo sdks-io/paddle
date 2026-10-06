@@ -201,6 +201,4 @@ export interface PaddleStore {
   finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string): Promise<boolean>;
   /** Moves an open change to a new renewal date; returns false when it is no longer open. */
   replanPendingPlanChange(subscriptionId: string, renewalAt: Date, applyAfter: Date): Promise<boolean>;
-  /** Reopens a change this caller marked applied at `appliedAt` (applying it failed); false when anything else touched it since. */
-  reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string): Promise<boolean>;
 }

@@ -125,11 +125,13 @@ export async function grantGoodwillDiscount(
     userId: null,
     operation: "createDiscount + updateSubscription (goodwill)",
     reuse: async (discountId) => discountId,
+    // Applied now, or used already (its one period may have passed): granted. Anything else stays unknown for a person.
+    absenceIsProof: false,
     find: async () => {
       const discount = await byCode();
       if (!discount) return undefined;
       const sub = (await client.subscriptions.getSubscription({ subscriptionId: input.subscriptionId })).data;
-      return sub.discount?.id === discount.id ? { id: discount.id, value: discount.id } : undefined;
+      return sub.discount?.id === discount.id || (discount.timesUsed ?? 0) > 0 ? { id: discount.id, value: discount.id } : undefined;
     },
     write: async () => {
       const sub = (await client.subscriptions.getSubscription({ subscriptionId: input.subscriptionId })).data;

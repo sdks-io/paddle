@@ -7,7 +7,7 @@
  *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts reopen ignored [--since 2026-10-01T00:00:00Z]   # after adding a price to plan_catalog
  *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts plan-changes            # apply end-of-term plan changes now due (recipe 04)
  *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts claims                  # writes whose outcome is still unknown (OutcomeUnknownError)
- *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts settle-claim <key> <id> # after checking Paddle: the write exists (its id: txn_, adj_, dsc_, ...)
+ *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts settle-claim <key> <id> # after checking Paddle: the write exists (its id: txn_, adj_, dsc_; for a charge on the next invoice, the claim key itself)
  *   npx tsx --env-file=.env scripts/paddle/paddle-jobs.ts release-claim <key>     # after checking Paddle: the write does not exist; a retry may write
  *
  * `reopen ignored` replays only state events (subscription.*, transaction.completed, adjustment.*), so
@@ -38,6 +38,10 @@ async function main(): Promise<void> {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const store = new PgPaddleStore(pool);
   const handler = createPaddleWebhookHandler(store, (msg, extra) => console.error(msg, extra ?? ""));
+  // The claim commands act only on a claim that is listed as unsettled (no result, older than the stale time).
+  const unsettled = async (key: string) => {
+    if (!(await store.listUnsettledClaims(STALE_CLAIM_MS)).some((c) => c.claimKey === key)) throw new Error(`${key} is not an unsettled claim (see: claims)`);
+  };
   try {
     switch (cmd) {
       case "reprocess":
@@ -55,13 +59,17 @@ async function main(): Promise<void> {
       case "claims":
         console.log(JSON.stringify(await store.listUnsettledClaims(STALE_CLAIM_MS), null, 2));
         return;
-      case "settle-claim":
+      case "settle-claim": {
         if (!arg || !arg2) throw new Error("settle-claim <claim key> <id of what Paddle holds>");
+        await unsettled(arg);
+        if (await store.isClaimResult(arg2)) throw new Error(`${arg2} is already recorded by another claim`);
         await store.completeClaim(arg, arg2);
         console.log(JSON.stringify({ settled: arg, resultId: arg2 }));
         return;
+      }
       case "release-claim":
         if (!arg) throw new Error("release-claim <claim key>");
+        await unsettled(arg);
         await store.releaseClaim(arg);
         console.log(JSON.stringify({ released: arg }));
         return;

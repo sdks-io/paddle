@@ -18,7 +18,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { checkoutClaimKey, createCheckoutTransaction, createPortalSession, CustomerEmailNotVerifiedError, ensureCustomer, getInvoiceUrl, listCatalog } from "./checkout.js";
 import { getPaddleClient } from "./client.js";
 import { getEntitlement, PaywallError } from "./entitlements.js";
-import { paddleError, toHttpAnswer } from "./errors.js";
+import { paddleError, toHttpAnswer, writeOutcome } from "./errors.js";
 import type { PaddleStore, SubscriptionRow } from "./store.js";
 import {
   cancelPlanChangeAtRenewal,
@@ -49,6 +49,12 @@ function subscriptionView(sub: { id: string; status: string; nextBilledAt?: Date
     scheduledChange: sub.scheduledChange ? { action: sub.scheduledChange.action, effectiveAt: sub.scheduledChange.effectiveAt } : null,
     items: sub.items.filter((i) => i.status !== "inactive").map((i) => ({ priceId: i.price.id, quantity: i.quantity })),
   };
+}
+
+type Totals = { details: { totals: { grandTotal: string; currencyCode: string } } } | null | undefined;
+const totalsView = (t: Totals) => (t ? { total: t.details.totals.grandTotal, currency: t.details.totals.currencyCode } : null);
+function previewView(p: { immediateTransaction?: Totals; nextTransaction?: Totals; nextBilledAt?: Date | null } | undefined) {
+  return p ? { chargeNow: totalsView(p.immediateTransaction), nextBill: totalsView(p.nextTransaction), nextBilledAt: p.nextBilledAt ?? null } : null;
 }
 
 export function billingRoutes(store: PaddleStore): Router {
@@ -156,14 +162,23 @@ export function billingRoutes(store: PaddleStore): Router {
     if (!currentPriceId) return res.status(409).json({ error: "subscription has no active item" });
     const items = await itemsWithNewBase(row, priceId, quantity);
     const mode = await chooseProrationMode({ status: row.status, priceId: currentPriceId, quantity: row.quantity }, { priceId, quantity });
+    if (body.preview === true) {
+      const preview = (await changePlan(row.id, items, mode, { preview: true })).preview;
+      return res.json({ preview: previewView(preview) });
+    }
     // A change now replaces any change planned for the renewal (applying the old list later would undo it).
     // Cancel it first, so the renewal job cannot apply it while this change is being made.
-    if (body.preview !== true) await store.finishPendingPlanChange(row.id, "canceled", new Date(), "superseded by a change applied now");
-    const result = await changePlan(row.id, items, mode, { preview: body.preview === true });
-    if (result.preview) {
-      const totals = (t: { details: { totals: { grandTotal: string; currencyCode: string } } } | null | undefined) =>
-        t ? { total: t.details.totals.grandTotal, currency: t.details.totals.currencyCode } : null;
-      return res.json({ preview: { chargeNow: totals(result.preview.immediateTransaction), nextBill: totals(result.preview.nextTransaction), nextBilledAt: result.preview.nextBilledAt ?? null } });
+    const pending = await store.getPendingPlanChange(row.id);
+    if (pending && !(await store.finishPendingPlanChange(row.id, "canceled", new Date(), "superseded by a change applied now"))) {
+      return res.status(409).json({ error: "the change planned for your renewal is being applied right now; try again in a minute" });
+    }
+    let result;
+    try {
+      result = await changePlan(row.id, items, mode);
+    } catch (err) {
+      // Refused or never sent: nothing changed, so the planned change stands again.
+      if (pending && writeOutcome(err) !== "unknown") await store.savePendingPlanChange(pending);
+      throw err;
     }
     return res.json(result.subscription ? subscriptionView(result.subscription) : null);
   }));

@@ -162,11 +162,6 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   assert.equal(await store.getPendingPlanChange("sub_1"), undefined);
   assert.equal(await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "too late"), false); // no effect on an applied change
   assert.equal(await store.replanPendingPlanChange("sub_1", t("2027-02-02T00:00:00Z"), t("2027-02-01T22:00:00Z")), false); // closed: not re-planned
-  // applying failed: the job reopens what it closed
-  assert.equal(await store.reopenPendingPlanChange("sub_1", t("2027-01-01T22:00:00Z"), "other time"), false);
-  assert.equal(await store.reopenPendingPlanChange("sub_1", appliedAt, "applying failed"), true);
-  assert.equal((await store.getPendingPlanChange("sub_1"))?.renewalAt.toISOString(), "2027-01-02T00:00:00.000Z");
-  await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "canceled");
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
 
