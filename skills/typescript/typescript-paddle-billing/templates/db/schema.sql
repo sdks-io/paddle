@@ -107,8 +107,9 @@ CREATE TABLE IF NOT EXISTS paddle_write_claims (
 
 -- The app's own attributes for every price it sells, keyed by Paddle price id. Paddle has no
 -- field for "features" or display order. Keep them here, never a copy of name/amount/interval:
--- read those from Paddle. Webhook events whose prices are not listed here belong to another app
--- on the same Paddle account and are ignored.
+-- read those from Paddle. Webhook events whose prices are not listed here, and whose products are
+-- not these rows' products, are treated as another app's on the same Paddle account and ignored.
+-- Keep this app's products to itself.
 CREATE TABLE IF NOT EXISTS plan_catalog (
   price_id       TEXT PRIMARY KEY,                      -- pri_...
   product_id     TEXT NOT NULL,                         -- pro_...

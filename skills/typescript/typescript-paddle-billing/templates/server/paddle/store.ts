@@ -140,8 +140,17 @@ export interface PaddleStore {
    * last leaseMs; oldest occurred_at first. Marks the returned events as attempted now (the lease).
    */
   leasePendingEvents(options: { maxAttempts: number; limit: number; leaseMs: number }): Promise<PendingEvent[]>;
-  /** Puts back every event parked in `state` (or processed but "ignored"): clears the state and the attempt count. Returns how many. */
-  reopenEvents(state: EventFinalState | "ignored"): Promise<number>;
+  /**
+   * Puts back every event parked in `state`: clears the state and the attempt count. Returns how many.
+   * "ignored" reopens processed events whose error starts with "ignored:", only of the types that
+   * mirror state (subscription.*, transaction.completed, adjustment.*), received at or after `since`.
+   */
+  reopenEvents(state: EventFinalState | "ignored", options?: { since?: Date }): Promise<number>;
+  /**
+   * Parks as "gave_up" every unprocessed, unparked event whose attempts reached maxAttempts (failures
+   * counted by the webhook route as well as the job), and returns them so the caller can alert.
+   */
+  parkExhaustedEvents(maxAttempts: number): Promise<{ eventId: string; eventType: string; error: string }[]>;
 
   // mirrors
   upsertSubscription(row: SubscriptionRow): Promise<void>;
@@ -165,6 +174,10 @@ export interface PaddleStore {
    * only if it still holds `seen`. Returns true for the one caller that may now write.
    */
   retakeClaim(claimKey: string, seen: { resultId: string | null; claimedAt: Date }): Promise<boolean>;
+  /** True when some claim already recorded this result id (so a lookup must not hand it to another claim). */
+  isClaimResult(resultId: string): Promise<boolean>;
+  /** Claims with no result older than `olderThanMs`: writes whose outcome is still unknown. For a person to settle. */
+  listUnsettledClaims(olderThanMs: number): Promise<{ claimKey: string; kind: WriteKind; userId: string | null; claimedAt: Date }[]>;
 
   // plan catalog (the app's own attributes per price it sells)
   getPlanByPriceId(priceId: string): Promise<PlanCatalogRow | undefined>;
@@ -184,6 +197,10 @@ export interface PaddleStore {
   getPendingPlanChange(subscriptionId: string): Promise<PendingPlanChange | undefined>;
   /** Open changes whose applyAfter is at or before `dueBefore`. */
   listDuePendingPlanChanges(dueBefore: Date): Promise<PendingPlanChange[]>;
-  /** Closes the open change (no effect on one already applied or canceled). */
-  finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string): Promise<void>;
+  /** Closes the open change; returns false (and changes nothing) when it was already applied or canceled. */
+  finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string): Promise<boolean>;
+  /** Moves an open change to a new renewal date; returns false when it is no longer open. */
+  replanPendingPlanChange(subscriptionId: string, renewalAt: Date, applyAfter: Date): Promise<boolean>;
+  /** Reopens a change this caller marked applied at `appliedAt` (applying it failed); false when anything else touched it since. */
+  reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string): Promise<boolean>;
 }

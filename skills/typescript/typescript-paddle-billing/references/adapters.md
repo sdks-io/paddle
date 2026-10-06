@@ -13,7 +13,9 @@ import { startReprocessLoop } from "./server/paddle/webhooks/reprocess.js";
 import pg from "pg";
 
 const app = express();
-const store = new PgPaddleStore(new pg.Pool({ connectionString: process.env.DATABASE_URL }));
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+pool.on("error", (err) => logger.error({ err }, "idle database connection failed")); // without it, node-postgres ends the process
+const store = new PgPaddleStore(pool);
 const handler = createPaddleWebhookHandler(store, (msg, extra) => logger.warn({ ...extra }, msg)); // hooks live in webhooks/setup.ts
 startReprocessLoop(handler, store); // re-runs unprocessed events every 5 minutes (or cron: paddle-jobs.ts reprocess)
 

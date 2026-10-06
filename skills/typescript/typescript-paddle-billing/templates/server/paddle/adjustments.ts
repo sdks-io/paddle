@@ -43,8 +43,12 @@ async function adjust(
   const client = getPaddleClient();
   const items: AdjustmentItemCreate[] | undefined =
     scope === "full" ? undefined : scope.map((i) => (i.full ? { itemId: i.lineItemId, type: "full" } : { itemId: i.lineItemId, type: "partial", ...(i.amount ? { amount: i.amount } : {}) }));
-  const sameLines = (adjItems: { itemId: string }[]) =>
-    scope === "full" ? true : scope.every((i) => adjItems.some((a) => a.itemId === i.lineItemId)) && adjItems.length === scope.length;
+  // The adjustment this call would create: same lines with the same type and amount (or a full adjustment).
+  const sameScope = (adj: { type?: string | null; items: { itemId: string; type: string; amount?: string | null }[] }) =>
+    scope === "full"
+      ? adj.type === "full"
+      : adj.items.length === scope.length &&
+        scope.every((i) => adj.items.some((a) => a.itemId === i.lineItemId && (i.full ? a.type === "full" : a.type === "partial" && a.amount === i.amount)));
 
   const { value, reused } = await claimedWrite(store, {
     claimKey: `${action}:${transactionId}:${scopeKey(scope)}`,
@@ -59,7 +63,7 @@ async function adjust(
     },
     find: async (since) => {
       const res = await client.adjustments.listAdjustments({ transactionId: [transactionId], action: [action], perPage: 50 });
-      const hit = res.data.find((a) => a.createdAt >= since && a.status !== "rejected" && a.reason === reason && sameLines(a.items));
+      const hit = res.data.find((a) => a.createdAt >= since && a.status !== "rejected" && a.reason === reason && sameScope(a));
       return hit ? { id: hit.id, value: hit } : undefined;
     },
     write: async () => {
@@ -107,57 +111,57 @@ export async function grantGoodwillDiscount(
   input: { subscriptionId: string; amount: string; currencyCode: string; description: string; ref: string },
 ) {
   const client = getPaddleClient();
-  const sub = (await client.subscriptions.getSubscription({ subscriptionId: input.subscriptionId })).data;
   const claimKey = `goodwill:${input.subscriptionId}:${input.ref}`;
-  // The code is the reference the discount is found by after an unknown outcome; every caller computes the same one.
+  // The code is the reference the discount is found by; every caller computes the same one.
   const code = `GW${createHash("sha256").update(claimKey).digest("hex").slice(0, 16).toUpperCase()}`;
-  if (sub.discount && sub.discount.id) {
-    const existing = (await client.discounts.listDiscounts({ id: [sub.discount.id], perPage: 1 })).data[0];
-    if (existing?.code !== code) throw new SubscriptionHasDiscountError(sub.discount.id);
-  }
+  const byCode = async () => (await client.discounts.listDiscounts({ code: [code], perPage: 1 })).data[0];
 
-  const { value: discountId, reused } = await claimedWrite(store, {
+  // One claimed write covers both steps (create the discount, apply it), so a repeat with the same ref
+  // never applies it again, even after its one period has passed. Both steps are safe to repeat: the
+  // discount is found by its code, and applying the same discount again leaves the same state.
+  const { value, reused } = await claimedWrite(store, {
     claimKey,
     kind: "discount",
     userId: null,
-    operation: "createDiscount (goodwill)",
-    reuse: async (id) => id,
+    operation: "createDiscount + updateSubscription (goodwill)",
+    reuse: async (discountId) => discountId,
     find: async () => {
-      const res = await client.discounts.listDiscounts({ code: [code], perPage: 1 });
-      const hit = res.data[0];
-      return hit ? { id: hit.id, value: hit.id } : undefined;
+      const discount = await byCode();
+      if (!discount) return undefined;
+      const sub = (await client.subscriptions.getSubscription({ subscriptionId: input.subscriptionId })).data;
+      return sub.discount?.id === discount.id ? { id: discount.id, value: discount.id } : undefined;
     },
     write: async () => {
-      const res = await client.discounts.createDiscount({
-        body: {
-          description: input.description,
-          type: "flat",
-          amount: input.amount,
-          currencyCode: input.currencyCode as NonNullable<Parameters<typeof client.discounts.createDiscount>[0]["body"]["currencyCode"]>,
-          code,
-          enabledForCheckout: false, // never usable at checkout; it exists only for this subscription
-          // Paddle refuses a one-off (recur: false) discount on a subscription (subscription_one_off_discount_not_valid):
-          // a recurring discount limited to one billing period gives the same single reduction.
-          recur: true,
-          maximumRecurringIntervals: 1,
-          customData: { goodwill_ref: claimKey },
-        },
+      const sub = (await client.subscriptions.getSubscription({ subscriptionId: input.subscriptionId })).data;
+      let discount = await byCode();
+      if (sub.discount && sub.discount.id !== discount?.id) throw new SubscriptionHasDiscountError(sub.discount.id);
+      if (!discount) {
+        discount = (
+          await client.discounts.createDiscount({
+            body: {
+              description: input.description,
+              type: "flat",
+              amount: input.amount,
+              currencyCode: input.currencyCode as NonNullable<Parameters<typeof client.discounts.createDiscount>[0]["body"]["currencyCode"]>,
+              code,
+              enabledForCheckout: false, // never usable at checkout; it exists only for this subscription
+              // Paddle refuses a one-off (recur: false) discount on a subscription (subscription_one_off_discount_not_valid):
+              // a recurring discount limited to one billing period gives the same single reduction.
+              recur: true,
+              maximumRecurringIntervals: 1,
+              customData: { goodwill_ref: claimKey },
+            },
+          })
+        ).data;
+      }
+      await client.subscriptions.updateSubscription({
+        subscriptionId: input.subscriptionId,
+        body: { discount: { id: discount.id, effectiveFrom: "next_billing_period" } },
       });
-      return { id: res.data.id, value: res.data.id };
+      return { id: discount.id, value: discount.id };
     },
   });
-
-  if (reused) {
-    // Granted before under this ref: apply it only if it was never used (a crash between the two calls).
-    const discount = (await client.discounts.listDiscounts({ id: [discountId], perPage: 1 })).data[0];
-    if (sub.discount?.id === discountId || (discount?.timesUsed ?? 0) > 0) return { discountId, subscription: sub, alreadyGranted: true };
-  }
-  // Setting the same discount again leaves the same state, so this update needs no claim.
-  const updated = await client.subscriptions.updateSubscription({
-    subscriptionId: input.subscriptionId,
-    body: { discount: { id: discountId, effectiveFrom: "next_billing_period" } },
-  });
-  return { discountId, subscription: updated.data, alreadyGranted: false };
+  return { discountId: value, alreadyGranted: reused };
 }
 
 /** Adjustments for a transaction or subscription (refund history for a billing page). per_page max is 50. */

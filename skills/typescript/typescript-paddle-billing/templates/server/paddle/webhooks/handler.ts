@@ -72,7 +72,7 @@ export interface HandlerOptions {
    * Reads a transaction's prices and products from Paddle. Used when a refund or chargeback arrives
    * before the purchase it concerns. Defaults to the SDK client; tests pass a stub.
    */
-  lookupTransaction?: (transactionId: string) => Promise<{ priceId: string; productId: string }[]>;
+  lookupTransaction?: (transactionId: string) => Promise<{ origin: string; items: { priceId: string; productId: string; recurring: boolean }[] } | undefined>;
 }
 
 export class PaddleWebhookHandler {
@@ -87,8 +87,10 @@ export class PaddleWebhookHandler {
   ) {
     this.lookupTransaction =
       options.lookupTransaction ??
-      (async (transactionId) =>
-        (await getPaddleClient().transactions.getTransaction({ transactionId })).data.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId })));
+      (async (transactionId) => {
+        const tx = (await getPaddleClient().transactions.getTransaction({ transactionId })).data;
+        return { origin: tx.origin, items: tx.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, recurring: i.price.billingCycle != null })) };
+      });
   }
 
   /**
@@ -189,6 +191,11 @@ export class PaddleWebhookHandler {
   async park(eventId: string, eventType: string, state: EventFinalState, cause: unknown): Promise<void> {
     const error = cause instanceof Error ? cause.message : String(cause);
     await this.store.markEventFinal(eventId, state, error);
+    await this.reportParked(eventId, eventType, state, error);
+  }
+
+  /** Reports an event that is already parked (the store parked it, e.g. parkExhaustedEvents). */
+  async reportParked(eventId: string, eventType: string, state: EventFinalState, error: string): Promise<void> {
     this.log(`paddle webhook ${state}`, { eventId, eventType, error });
     try {
       await this.hooks.onEventNeedsAttention?.({ eventId, eventType, state, error });
@@ -226,6 +233,16 @@ export class PaddleWebhookHandler {
   private async concernsThisApp(tx: WebhookTransaction): Promise<boolean> {
     for (const item of tx.items) if (await this.isCatalogItem(item.price)) return true;
     return tx.subscriptionId ? (await this.store.getSubscription(tx.subscriptionId)) !== undefined : false;
+  }
+
+  /** True when this transaction, once completed, records a purchase here: a checkout (not a subscription renewal or charge) with a one-time catalog item. */
+  private async wouldRecordPurchase(transactionId: string): Promise<boolean> {
+    const tx = await this.lookupTransaction(transactionId);
+    if (!tx || tx.origin.startsWith("subscription_")) return false;
+    for (const item of tx.items) {
+      if (!item.recurring && (await this.isCatalogItem({ id: item.priceId, productId: item.productId }))) return true;
+    }
+    return false;
   }
 
   private async applySubscription(event: SubscriptionEvent): Promise<string | undefined> {
@@ -310,19 +327,12 @@ export class PaddleWebhookHandler {
     const subscription = adj.subscriptionId ? await this.store.getSubscription(adj.subscriptionId) : undefined;
     // An approved refund or a chargeback takes back what the lines gave. A reversed chargeback is the owner's call (onAdjustment).
     const takesBack = (adj.action === "refund" && adj.status === "approved") || adj.action === "chargeback";
-    if (!purchase && !subscription) {
-      if (takesBack) {
-        // The purchase may not be recorded yet (its transaction.completed is waiting to be retried):
-        // if the transaction is this app's, fail so the event is retried after the purchase exists.
-        const items = await this.lookupTransaction(adj.transactionId);
-        for (const item of items) {
-          if (await this.isCatalogItem({ id: item.priceId, productId: item.productId })) {
-            throw new Error(`purchase ${adj.transactionId} not recorded yet; retrying the ${adj.action} later`);
-          }
-        }
-      }
-      return "ignored: transaction not known to this app";
+    if (!purchase && takesBack && (await this.wouldRecordPurchase(adj.transactionId))) {
+      // The purchase is not recorded yet (its transaction.completed is still on its way or waiting for a retry):
+      // fail, so this event is retried once the purchase exists.
+      throw new Error(`purchase ${adj.transactionId} not recorded yet; retrying the ${adj.action} later`);
     }
+    if (!purchase && !subscription) return "ignored: transaction not known to this app";
 
     if (purchase && takesBack) {
       // Whole lines only: a refund of part of a line's amount leaves the line (and what it gave) in place.

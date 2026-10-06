@@ -15,6 +15,9 @@
  *   → OutcomeUnknownError, and the claim stays so a repeat cannot write twice.
  * - A claim whose result is used up, or whose writer gave up and left nothing at Paddle, is taken
  *   over with store.retakeClaim, which succeeds for exactly one caller.
+ * - A lookup never settles a claim with an entity another claim already recorded.
+ * - Claims still without a result after STALE_CLAIM_MS are listed by `paddle-jobs.ts claims`, for a
+ *   person to settle (`settle-claim`) or release (`release-claim`) after checking Paddle.
  * These are the DUPLICATE CLAIMS and UNKNOWN OUTCOMES rows of the routing skill's table 1b.1.
  *
  * Updates that set a state (change items, cancel, pause, remove a scheduled change) are not
@@ -62,6 +65,12 @@ export interface ClaimedWrite<T> {
 }
 
 export async function claimedWrite<T>(store: PaddleStore, w: ClaimedWrite<T>): Promise<{ value: T; reused: boolean }> {
+  // A lookup may match a write another claim already owns (an earlier charge or refund of the same items): never take it over.
+  const lookup = async (since: Date) => {
+    const found = await w.find(since);
+    return found && !(await store.isClaimResult(found.id)) ? found : undefined;
+  };
+
   for (let round = 0; round < 3; round++) {
     const claim = await store.claimWrite(w.claimKey, w.kind, w.userId);
     if (!claim.claimed) {
@@ -75,7 +84,7 @@ export async function claimedWrite<T>(store: PaddleStore, w: ClaimedWrite<T>): P
       }
       // Claimed but no result: another request is writing, or an earlier attempt ended unknown.
       if (Date.now() - claim.claimedAt.getTime() < STALE_CLAIM_MS) throw new WriteInProgressError(w.claimKey);
-      const found = await w.find(new Date(claim.claimedAt.getTime() - LOOKUP_MARGIN_MS));
+      const found = await lookup(new Date(claim.claimedAt.getTime() - LOOKUP_MARGIN_MS));
       if (found) {
         await store.completeClaim(w.claimKey, found.id);
         return { value: found.value, reused: true };
@@ -101,7 +110,7 @@ export async function claimedWrite<T>(store: PaddleStore, w: ClaimedWrite<T>): P
         throw err;
       }
       try {
-        const found = await w.find(since);
+        const found = await lookup(since);
         if (found) {
           await store.completeClaim(w.claimKey, found.id);
           return { value: found.value, reused: false };

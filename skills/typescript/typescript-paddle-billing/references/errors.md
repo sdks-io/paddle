@@ -33,7 +33,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | events processed twice | no `event_id` dedupe | `recordEvent` insert-if-absent |
 | access reverts after an upgrade | older `subscription.updated` applied after a newer one | compare `occurred_at` (handler does) |
 | `paddle_webhook_events.error` set, `final_state` empty | handler threw (DB down, a hook failed) | the reprocess job retries it; fix the cause if it keeps failing |
-| `final_state = 'gave_up'` | the event failed 10 times | fix the cause, then `paddle-jobs.ts reopen gave_up` |
+| `final_state = 'gave_up'` | the event failed 10 times (in the route or the job) | fix the cause, then `paddle-jobs.ts reopen gave_up`. A refund that keeps failing with "purchase … not recorded yet" belongs to a sale the app never recorded (made before the webhook existed): handle it by hand |
 | `final_state = 'undecodable'` | the body does not match the SDK's model for its event type | upgrade the SDK (or fix the model), then `paddle-jobs.ts reopen undecodable` |
 | events recorded with error "ignored: prices not in plan_catalog" | another app on the same Paddle account, or a price missing from `plan_catalog` | add the price to `plan_catalog` if the app sells it, then `paddle-jobs.ts reopen ignored` (a replayed notification has the same `event_id` and is skipped as already processed) |
 
@@ -66,7 +66,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 
 ## SDK-level failures (not Paddle answers)
 
-How the SDK reports transport, decode and configuration failures → `typescript-error-handling`. Paddle-specific: `writeOutcome(err)` (`errors.ts`) sorts a failed write into refused (4xx: nothing changed), unknown (connection lost, timeout, 5xx, or a 2xx body that could not be read: re-read before anything else) and not sent (no re-read). `claimedWrite` (`writes.ts`) does this for every create; a write still unknown after the re-read raises `OutcomeUnknownError`, answered as "outcome unknown", never "failed".
+How the SDK reports transport, decode and configuration failures → `typescript-error-handling`. Paddle-specific: `writeOutcome(err)` (`errors.ts`) sorts a failed write into refused (4xx: nothing changed), unknown (connection lost, timeout, 5xx, or a 2xx body that could not be read: re-read before anything else) and not sent (no re-read). `claimedWrite` (`writes.ts`) does this for every create; a write still unknown after the re-read raises `OutcomeUnknownError`, answered as "outcome unknown", never "failed". Its claim stays, so a repeat cannot write twice. `paddle-jobs.ts claims` lists such claims; look the write up in Paddle (`paddle-inspect.ts customer|subscription|transaction`), then `settle-claim <key> <id>` if it exists or `release-claim <key>` if it does not. A one-off charge whose writer stopped half-way always needs this step.
 
 ## What the app answers its own callers
 

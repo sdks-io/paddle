@@ -129,17 +129,31 @@ export class PgPaddleStore implements PaddleStore {
     }));
   }
 
-  async reopenEvents(state: EventFinalState | "ignored") {
+  async reopenEvents(state: EventFinalState | "ignored", options: { since?: Date } = {}) {
     const r =
       state === "ignored"
         ? await this.pool.query(
-            "UPDATE paddle_webhook_events SET processed_at = NULL, attempts = 0, last_attempt_at = NULL WHERE processed_at IS NOT NULL AND error LIKE 'ignored:%'",
+            `UPDATE paddle_webhook_events SET processed_at = NULL, attempts = 0, last_attempt_at = NULL
+             WHERE processed_at IS NOT NULL AND error LIKE 'ignored:%'
+               AND (event_type LIKE 'subscription.%' OR event_type = 'transaction.completed' OR event_type LIKE 'adjustment.%')
+               AND ($1::timestamptz IS NULL OR received_at >= $1)`,
+            [options.since ?? null],
           )
         : await this.pool.query(
             "UPDATE paddle_webhook_events SET final_state = NULL, attempts = 0, last_attempt_at = NULL WHERE final_state = $1 AND processed_at IS NULL",
             [state],
           );
     return r.rowCount ?? 0;
+  }
+
+  async parkExhaustedEvents(maxAttempts: number) {
+    const r = await this.pool.query(
+      `UPDATE paddle_webhook_events SET final_state = 'gave_up'
+       WHERE processed_at IS NULL AND final_state IS NULL AND attempts >= $1
+       RETURNING event_id, event_type, error`,
+      [maxAttempts],
+    );
+    return (r.rows as Row[]).map((row) => ({ eventId: row["event_id"] as string, eventType: row["event_type"] as string, error: (row["error"] as string | null) ?? "" }));
   }
 
   // ------------------------------------------------------------- subscriptions
@@ -273,6 +287,24 @@ export class PgPaddleStore implements PaddleStore {
     return row ? toPlan(row) : undefined;
   }
 
+  async isClaimResult(resultId: string) {
+    const r = await this.pool.query("SELECT 1 FROM paddle_write_claims WHERE result_id = $1 LIMIT 1", [resultId]);
+    return r.rowCount === 1;
+  }
+
+  async listUnsettledClaims(olderThanMs: number) {
+    const r = await this.pool.query(
+      "SELECT claim_key, kind, user_id, created_at FROM paddle_write_claims WHERE result_id IS NULL AND created_at <= now() - $1 * interval '1 millisecond' ORDER BY created_at",
+      [olderThanMs],
+    );
+    return (r.rows as Row[]).map((row) => ({
+      claimKey: row["claim_key"] as string,
+      kind: row["kind"] as WriteKind,
+      userId: (row["user_id"] as string | null) ?? null,
+      claimedAt: row["created_at"] as Date,
+    }));
+  }
+
   async isCatalogProduct(productId: string) {
     const r = await this.pool.query("SELECT 1 FROM plan_catalog WHERE product_id = $1 LIMIT 1", [productId]);
     return r.rowCount === 1;
@@ -330,10 +362,28 @@ export class PgPaddleStore implements PaddleStore {
 
   async finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string) {
     const column = outcome === "applied" ? "applied_at" : "canceled_at";
-    await this.pool.query(
+    const r = await this.pool.query(
       `UPDATE paddle_pending_plan_changes SET ${column} = $2, note = $3 WHERE subscription_id = $1 AND applied_at IS NULL AND canceled_at IS NULL`,
       [subscriptionId, at, note ?? null],
     );
+    return r.rowCount === 1;
+  }
+
+  async replanPendingPlanChange(subscriptionId: string, renewalAt: Date, applyAfter: Date) {
+    const r = await this.pool.query(
+      "UPDATE paddle_pending_plan_changes SET renewal_at = $2, apply_after = $3 WHERE subscription_id = $1 AND applied_at IS NULL AND canceled_at IS NULL",
+      [subscriptionId, renewalAt, applyAfter],
+    );
+    return r.rowCount === 1;
+  }
+
+  async reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string) {
+    const r = await this.pool.query(
+      `UPDATE paddle_pending_plan_changes SET applied_at = NULL, note = $3
+       WHERE subscription_id = $1 AND canceled_at IS NULL AND abs(extract(epoch FROM applied_at - $2::timestamptz)) < 0.001`,
+      [subscriptionId, appliedAt, note],
+    );
+    return r.rowCount === 1;
   }
 
   // ------------------------------------------------------------- helpers

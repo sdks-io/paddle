@@ -57,8 +57,8 @@ const hooks: WebhookHooks = {
   },
 };
 // Paddle lookups the handler makes (a refund that arrives before its purchase) are stubbed: no network.
-const paddleTransactions = new Map<string, { priceId: string; productId: string }[]>();
-const options = { lookupTransaction: async (id: string) => paddleTransactions.get(id) ?? [] };
+const paddleTransactions = new Map<string, { origin: string; items: { priceId: string; productId: string; recurring: boolean }[] }>();
+const options = { lookupTransaction: async (id: string) => paddleTransactions.get(id) };
 const handler = new PaddleWebhookHandler(config, store, hooks, undefined, options);
 
 let counter = 0;
@@ -309,7 +309,7 @@ const foreignAdj = adjustmentEvent({ transactionId: "txn_unknown", status: "appr
 await deliver(foreignAdj);
 assert.match(store.events.get(foreignAdj.event_id)!.error ?? "", /not known/);
 // a refund that arrives before its purchase is recorded is retried, not dropped
-paddleTransactions.set("txn_late", [{ priceId: "pri_lifetime", productId: "pro_lifetime" }]);
+paddleTransactions.set("txn_late", { origin: "web", items: [{ priceId: "pri_lifetime", productId: "pro_lifetime", recurring: false }] });
 const early = adjustmentEvent({ transactionId: "txn_late", status: "approved", lineItemIds: "full" });
 await assert.rejects(deliver(early), /not recorded yet/);
 assert.equal(store.events.get(early.event_id)!.processedAt, undefined);
@@ -317,6 +317,11 @@ await deliver(oneTimeEvent("transaction.completed", { id: "txn_late" }));
 assert.equal(await hasPurchased(store, "user_42", "pro_lifetime"), true);
 await deliver(early); // Paddle's retry, now that the purchase exists
 assert.deepEqual((await store.getPurchase("txn_late"))?.items.map((i) => i.refundedAt !== null), [true, true]);
+// a refund of a renewal (no purchase will ever be recorded) is not retried
+paddleTransactions.set("txn_renewal", { origin: "subscription_recurring", items: [{ priceId: "pri_pro_m", productId: "pro_pro", recurring: true }] });
+const renewalRefund = adjustmentEvent({ transactionId: "txn_renewal", status: "approved", lineItemIds: "full" });
+await deliver(renewalRefund);
+assert.ok(store.events.get(renewalRefund.event_id)!.processedAt);
 // a custom price (a quote) for a catalog product is this app's purchase
 const quote = oneTimeEvent("transaction.completed", { id: "txn_quote", prices: ["pri_hidden_quote", "pri_other_x"] });
 quote.data.items[0].price.product_id = "pro_lifetime";

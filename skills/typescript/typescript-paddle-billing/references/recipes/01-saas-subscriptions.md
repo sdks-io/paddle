@@ -50,13 +50,13 @@ Needs: price IDs from step 2. Produces: a `PaddleStore` implementation and the `
 
 Run `templates/db/schema.sql` (idempotent) and use `store.pg.ts` (PostgreSQL), or port it to the project's ORM keeping the semantics in `store.ts`: `recordEvent` = insert on `event_id` that returns false only when the event was already processed; `markEventFailed` counts the attempt and leaves the event to be processed again; `upsertSubscription`/`upsertPurchase` = write only when `lastEventOccurredAt` is newer; `claimWrite` = insert under the unique key. Run `templates/tests/store.test.mts` against it.
 
-Then insert one `plan_catalog` row per price from step 2, recurring and one-time: `(price_id, product_id, tier_key='pro', display_order, features={...})`. Webhook events for prices not listed there are ignored as another app's.
+Then insert one `plan_catalog` row per price from step 2, recurring and one-time: `(price_id, product_id, tier_key='pro', display_order, features={...})`. Webhook events whose prices are not listed there, and whose products are not those rows' products, are ignored as another app's; keep this app's products to itself.
 
 ## Step 4 — Webhook endpoint
 
 Needs: the store, a public HTTPS URL. Produces: `PADDLE_WEBHOOK_SECRET`, `ntfset_…`.
 
-1. Copy `templates/server/paddle/webhooks/*`. Mount with the raw body (Express: `express.raw({ type: "application/json" })` on this route, before `express.json()`; Next.js: `req.text()` on the Node runtime). Pass an `onEventNeedsAttention` hook that alerts the owner.
+1. Copy `templates/server/paddle/webhooks/*`. Mount with the raw body (Express: `express.raw({ type: "application/json" })` on this route, before `express.json()`; Next.js: `req.text()` on the Node runtime). Put the app's hooks (emails, credits, the owner alert in `onEventNeedsAttention`) in `webhooks/setup.ts` and build the handler with `createPaddleWebhookHandler(store)`.
 2. `npx tsx --env-file=.env scripts/paddle/paddle-setup.ts webhook https://<host>/api/paddle/webhook --name "<app>"`: it reuses the destination for that URL or creates it with the events below, and writes `PADDLE_WEBHOOK_SECRET` to `.env` without printing it (a platform that reads only its own secret store: `references/adapters.md`). Restart the server.
 3. Schedule the reprocess job: `startReprocessLoop(handler, store)` in the server, or `paddle-jobs.ts reprocess` every 5 minutes.
 4. `npx tsx --env-file=.env scripts/paddle/paddle-inspect.ts simulate <ntfset_…> subscription_creation` → expect rows in `paddle_webhook_events`. Simulated payloads use Paddle's example price IDs, so the handler records them as ignored (`error` starts with "ignored"); that proves delivery, verification and recording. The real checkout in step 6 proves the mirror.

@@ -28,7 +28,7 @@ Code: `templates/server/paddle/webhooks/*`. Destination: created or reused by th
 | `transaction.payment_failed` | a payment attempt failed (checkout or renewal) | `onPaymentFailed` hook: notify; Paddle retries renewals |
 | `transaction.paid` | captured but not yet processed | do nothing (may lack `invoice_number`, `subscription_id`) |
 | `transaction.billed` | invoice issued (manual collection) | B2B invoicing only |
-| `adjustment.created` / `adjustment.updated` | refund/credit/chargeback created or changed status | an approved refund (on either event: refunds that qualify for automatic approval are created `approved` and never send `adjustment.updated` on live) or a chargeback marks the purchase lines it covers as refunded; `onPurchaseRefunded` revokes what they gave (negative credit entry) |
+| `adjustment.created` / `adjustment.updated` | refund/credit/chargeback created or changed status | an approved refund (on either event: refunds that qualify for automatic approval are created `approved` and never send `adjustment.updated` on live) or a chargeback marks the purchase lines it refunds whole (items of type `full`, every line for a full refund or a chargeback) as refunded; `onPurchaseRefunded` revokes what they gave (negative credit entry). A partial amount leaves the line; `onAdjustment` sees it. A refund that arrives before its purchase is recorded fails and is retried |
 | `customer.created` / `updated`, `address.*`, `business.*` | buyer records | optional: refresh email/name cache |
 | `price.*`, `product.*`, `discount.*` | catalog edits in the dashboard | optional: invalidate catalog cache |
 | `payout.created` / `payout.paid` | Paddle paid the owner | owner notification only |

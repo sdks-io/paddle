@@ -234,11 +234,7 @@ export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Da
       if (!sub.nextBilledAt || sub.nextBilledAt.getTime() !== change.renewalAt.getTime()) {
         // The renewal date moved (trial extended, date changed, or the renewal already happened): plan against the new one.
         if (sub.nextBilledAt) {
-          await store.savePendingPlanChange({
-            ...change,
-            renewalAt: sub.nextBilledAt,
-            applyAfter: new Date(sub.nextBilledAt.getTime() - PLAN_CHANGE_WINDOW.startBeforeRenewalMs),
-          });
+          await store.replanPendingPlanChange(change.subscriptionId, sub.nextBilledAt, new Date(sub.nextBilledAt.getTime() - PLAN_CHANGE_WINDOW.startBeforeRenewalMs));
         }
         await skip("renewal date moved; re-planned", !sub.nextBilledAt);
         continue;
@@ -255,8 +251,18 @@ export async function applyDuePlanChanges(store: PaddleStore, now: Date = new Da
       }
       const targetPrice = (await getPaddleClient().prices.getPrice({ priceId: target.priceId })).data;
       const mode: ProrationBillingMode = cycleOf(currentPrice) === cycleOf(targetPrice) ? "do_not_bill" : "full_immediately";
-      await changePlan(change.subscriptionId, change.items, mode);
-      await store.finishPendingPlanChange(change.subscriptionId, "applied", new Date(), `applied with ${mode}`);
+      // Close the change before calling Paddle, so a cancel (or a change applied now) after this point cannot be undone by it.
+      const appliedAt = new Date();
+      if (!(await store.finishPendingPlanChange(change.subscriptionId, "applied", appliedAt, `applied with ${mode}`))) {
+        result.skipped.push({ subscriptionId: change.subscriptionId, reason: "canceled meanwhile" });
+        continue;
+      }
+      try {
+        await changePlan(change.subscriptionId, change.items, mode);
+      } catch (err) {
+        await store.reopenPendingPlanChange(change.subscriptionId, appliedAt, `applying failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
       result.applied.push(change.subscriptionId);
     } catch (err) {
       // Left open: the next run tries again while the window lasts. Log it.
@@ -410,9 +416,13 @@ export async function chargeOneOff(
     const next = (await client.subscriptions.getSubscription({ subscriptionId, include: ["next_transaction"] })).data.nextTransaction;
     return next ? next.details.lineItems.map((l) => ({ priceId: l.priceId ?? null, productId: l.product.id ?? null })) : [];
   };
-  // Next-period charges join the renewal invoice, where earlier charges for the same price may already sit:
-  // the lookup counts this charge's lines before the write and accepts the charge only when the count grew.
+  const chargeTransactions = async () =>
+    (await client.transactions.listTransactions({ subscriptionId: [subscriptionId], origin: ["subscription_charge"], orderBy: "created_at[DESC]", perPage: 30 })).data;
+  // Earlier charges for the same items may exist (on the renewal invoice, or as earlier charge transactions):
+  // the write notes what exists first, and the lookup accepts only something new. Without that note (a stale
+  // claim from another process) the outcome stays unknown for a person to settle (paddle-jobs.ts claims).
   let linesBefore: number | undefined;
+  let chargesBefore: Set<string> | undefined;
 
   const { value, reused } = await claimedWrite(store, {
     claimKey: `charge:${subscriptionId}:${options.ref}`,
@@ -420,12 +430,15 @@ export async function chargeOneOff(
     userId: null,
     operation: "createSubscriptionCharge",
     reuse: async (id) => id,
-    absenceIsProof: when === "immediately",
+    absenceIsProof: false,
     find: async (since) => {
       if (when === "immediately") {
-        const txns = await client.transactions.listTransactions({ subscriptionId: [subscriptionId], origin: ["subscription_charge"], orderBy: "created_at[DESC]", perPage: 30 });
-        const hit = txns.data.find((t) => t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))));
-        return hit ? { id: subscriptionId, value: subscriptionId } : undefined;
+        if (chargesBefore === undefined) return undefined;
+        const before = chargesBefore;
+        const hit = (await chargeTransactions()).find(
+          (t) => !before.has(t.id) && t.createdAt >= since && matches(t.items.map((i) => ({ priceId: i.price.id, productId: i.price.productId, description: i.price.description }))),
+        );
+        return hit ? { id: hit.id, value: subscriptionId } : undefined;
       }
       if (linesBefore === undefined) return undefined; // nothing to compare with: cannot tell
       const after = (await nextLines()).filter(isChargeLine).length;
@@ -433,6 +446,7 @@ export async function chargeOneOff(
     },
     write: async () => {
       if (when === "next_billing_period") linesBefore = (await nextLines()).filter(isChargeLine).length;
+      else chargesBefore = new Set((await chargeTransactions()).map((t) => t.id));
       const res = await client.subscriptions.createSubscriptionCharge({ subscriptionId, body });
       return { id: res.data.id, value: res.data.id };
     },

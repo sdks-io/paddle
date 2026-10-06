@@ -44,14 +44,26 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).map((e: { eventId: string; attempts: number }) => e.eventId), ["evt_2", "evt_3"]);
   assert.deepEqual((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 }))[0]?.payload, { event_id: "evt_2" });
   // a lease hides events received or attempted within it, from every caller
-  await store.recordEvent({ eventId: "evt_4", eventType: "x", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} });
+  await store.recordEvent({ eventId: "evt_4", eventType: "subscription.created", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} });
   assert.deepEqual(await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 60_000 }), []);
   // ignored events can be reopened (e.g. after a price was added to plan_catalog)
   await store.markEventProcessed("evt_4", "ignored: prices not in plan_catalog");
-  assert.equal(await store.recordEvent({ eventId: "evt_4", eventType: "x", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} }), false);
+  assert.equal(await store.recordEvent({ eventId: "evt_4", eventType: "subscription.created", occurredAt: t("2026-10-04T00:00:00Z"), payload: {} }), false);
   assert.equal(await store.reopenEvents("ignored"), 1);
   assert.ok((await store.leasePendingEvents({ maxAttempts: 5, limit: 10, leaseMs: 0 })).some((e: { eventId: string }) => e.eventId === "evt_4"));
   await store.markEventProcessed("evt_4");
+  // "reopen ignored" replays only state events, and only since a date when given
+  await store.recordEvent({ eventId: "evt_5", eventType: "transaction.payment_failed", occurredAt: t("2026-10-05T00:00:00Z"), payload: {} });
+  await store.markEventProcessed("evt_5", "ignored: prices not in plan_catalog");
+  await store.recordEvent({ eventId: "evt_6", eventType: "subscription.updated", occurredAt: t("2026-10-05T00:00:00Z"), payload: {} });
+  await store.markEventProcessed("evt_6", "ignored: prices not in plan_catalog");
+  assert.equal(await store.reopenEvents("ignored", { since: new Date(Date.now() + 60_000) }), 0);
+  assert.equal(await store.reopenEvents("ignored"), 1); // evt_6 only
+  await store.markEventProcessed("evt_6");
+  // events whose attempts ran out (failures in the route count too) are parked and returned once
+  for (let i = 0; i < 3; i++) await store.markEventFailed("evt_3", "still failing");
+  assert.deepEqual((await store.parkExhaustedEvents(3)).map((e: { eventId: string }) => e.eventId), ["evt_3"]);
+  assert.deepEqual(await store.parkExhaustedEvents(3), []);
 
   // subscriptions: newer wins
   await store.upsertSubscription(subscription());
@@ -119,6 +131,12 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   const after = await store.claimWrite("refund:txn_1:full", "refund", null);
   assert.equal(!after.claimed && after.resultId, null);
   assert.equal(await store.retakeClaim("refund:txn_1:full", { resultId: seen.resultId, claimedAt: seen.claimedAt }), false);
+  assert.equal(await store.isClaimResult("txn_9"), false);
+  await store.completeClaim("refund:txn_1:full", "adj_7");
+  assert.equal(await store.isClaimResult("adj_7"), true);
+  await store.claimWrite("charge:sub_1:usage-1", "charge", null);
+  assert.ok((await store.listUnsettledClaims(0)).some((c: { claimKey: string }) => c.claimKey === "charge:sub_1:usage-1"));
+  assert.deepEqual(await store.listUnsettledClaims(60_000), []);
 
   // credits: idempotent on (transaction, reason, ref); several lines and refunds each count once
   await store.addCredits({ userId: "u1", delta: 100, reason: "purchase", transactionId: "txn_1", ref: "txnitm_a" });
@@ -138,9 +156,17 @@ async function contract(name: string, store: PaddleStore): Promise<void> {
   assert.deepEqual((await store.getPendingPlanChange("sub_1"))?.items, [{ priceId: "pri_m", quantity: 1 }]);
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2026-12-31T21:00:00Z")), []);
   assert.equal((await store.listDuePendingPlanChanges(t("2026-12-31T22:30:00Z"))).length, 1);
-  await store.finishPendingPlanChange("sub_1", "applied", t("2026-12-31T22:30:00Z"), "applied with do_not_bill");
+  assert.equal(await store.replanPendingPlanChange("sub_1", t("2027-01-02T00:00:00Z"), t("2027-01-01T22:00:00Z")), true);
+  const appliedAt = t("2027-01-01T22:30:00Z");
+  assert.equal(await store.finishPendingPlanChange("sub_1", "applied", appliedAt, "applied with do_not_bill"), true);
   assert.equal(await store.getPendingPlanChange("sub_1"), undefined);
-  await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "too late"); // no effect on an applied change
+  assert.equal(await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "too late"), false); // no effect on an applied change
+  assert.equal(await store.replanPendingPlanChange("sub_1", t("2027-02-02T00:00:00Z"), t("2027-02-01T22:00:00Z")), false); // closed: not re-planned
+  // applying failed: the job reopens what it closed
+  assert.equal(await store.reopenPendingPlanChange("sub_1", t("2027-01-01T22:00:00Z"), "other time"), false);
+  assert.equal(await store.reopenPendingPlanChange("sub_1", appliedAt, "applying failed"), true);
+  assert.equal((await store.getPendingPlanChange("sub_1"))?.renewalAt.toISOString(), "2027-01-02T00:00:00.000Z");
+  await store.finishPendingPlanChange("sub_1", "canceled", t("2027-01-02T00:00:00Z"), "canceled");
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
   assert.deepEqual(await store.listDuePendingPlanChanges(t("2027-02-01T00:00:00Z")), []);
 

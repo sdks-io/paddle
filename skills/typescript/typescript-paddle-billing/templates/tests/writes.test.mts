@@ -173,6 +173,22 @@ assert.equal(r1.adjustment.id, "adj_1");
 assert.equal(r2.reused, true);
 assert.equal(posts("/adjustments"), 1);
 
+// 7b. a dropped partial refund is not settled by an earlier refund of the same line with another amount
+const partial = (id: string, amount: string) => ({ ...adjustment(id), type: "partial", status: "approved", items: [{ id: `adjitm_${id}`, item_id: "txnitm_x", type: "partial", amount, totals: { subtotal: amount, tax: "0", total: amount } }] });
+await store.claimWrite("refund:txn_1:txnitm_x=500", "refund", null);
+await store.completeClaim("refund:txn_1:txnitm_x=500", "adj_500");
+answer = (method, path) => {
+  if (method === "POST" && path === "/adjustments") return "drop";
+  if (method === "GET" && path === "/adjustments") return json(200, { data: [partial("adj_500", "500")], meta: { ...meta, pagination: { per_page: 50, next: "https://x/adjustments", has_more: false, estimated_total: 1 } } });
+  return json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
+};
+const dropped = await refundTransaction(store, "txn_1", "goodwill", [{ lineItemId: "txnitm_x", amount: "300" }]).catch((e: unknown) => e);
+assert.ok(dropped instanceof OutcomeUnknownError);
+// ... while asking again for the same 500 returns the refund its claim already holds
+const sameAmount = await refundTransaction(store, "txn_1", "goodwill", [{ lineItemId: "txnitm_x", amount: "500" }]);
+assert.equal(sameAmount.reused, true);
+assert.equal(sameAmount.adjustment.id, "adj_500");
+
 // 8. a one-off charge with the same ref is made once
 // API responses carry management_urls, which webhook payloads leave out.
 const subscription = { ...fixture("sandbox-subscription-created").data, management_urls: { update_payment_method: null, cancel: "https://sandbox-buyer-portal.paddle.com/cancel" } };
@@ -187,6 +203,19 @@ await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 
 const again = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "next_billing_period", { ref: "usage:2026-10" });
 assert.equal("reused" in again && again.reused, true);
 assert.equal(sent.filter((r) => r.method === "POST").length, 1);
+// 8b. a dropped immediate charge is not settled by an earlier charge of the same items
+const chargeTxn = (id: string) => ({ ...transaction(id, "completed", "x"), subscription_id: subscription.id, origin: "subscription_charge", items: [{ ...fixture("sandbox-transaction-completed").data.items[0], price: { ...fixture("sandbox-transaction-completed").data.items[0].price, id: "pri_overage" } }] });
+answer = (method, path) => {
+  if (method === "POST" && path.endsWith("/charge")) return "drop";
+  if (method === "GET" && path === "/transactions") return json(200, { data: [chargeTxn("txn_earlier")], meta: { ...meta, pagination: { per_page: 30, next: "https://x/transactions", has_more: false, estimated_total: 1 } } });
+  return json(404, { error: { type: "request_error", documentation_url: "https://developer.paddle.com/errors", code: "not_found", detail: "x" }, meta });
+};
+const droppedCharge = await chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "immediately", { ref: "order-B" }).catch((e: unknown) => e);
+assert.ok(droppedCharge instanceof OutcomeUnknownError);
+// the next attempt does not write again: the claim waits for a person (paddle-jobs.ts claims)
+sent.length = 0;
+await assert.rejects(chargeOneOff(store, subscription.id, [{ priceId: "pri_overage", quantity: 3 }], "immediately", { ref: "order-B" }), WriteInProgressError);
+assert.equal(sent.filter((r) => r.method === "POST").length, 0);
 
 // 9. a plan change whose answer was lost counts as done when the subscription already shows the new items
 const target = [{ priceId: subscription.items[0].price.id as string, quantity: subscription.items[0].quantity as number }];

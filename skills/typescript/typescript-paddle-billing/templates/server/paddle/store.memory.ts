@@ -16,6 +16,9 @@ import type {
   WriteKind,
 } from "./store.js";
 
+/** Event types that mirror state; "reopen ignored" replays only these. */
+const MIRRORED_TYPES = /^(subscription\.|transaction\.completed$|adjustment\.)/;
+
 interface EventRecord {
   eventType: string;
   occurredAt: Date;
@@ -102,11 +105,16 @@ export class MemoryPaddleStore implements PaddleStore {
     for (const [, e] of leased) e.lastAttemptAt = new Date(now);
     return leased.map(([eventId, e]) => ({ eventId, eventType: e.eventType, payload: e.payload, attempts: e.attempts }));
   }
-  async reopenEvents(state: EventFinalState | "ignored") {
+  async reopenEvents(state: EventFinalState | "ignored", options: { since?: Date } = {}) {
     let n = 0;
     for (const e of this.events.values()) {
       const parked = state !== "ignored" && e.processedAt === undefined && e.finalState === state;
-      const ignored = state === "ignored" && e.processedAt !== undefined && (e.error ?? "").startsWith("ignored:");
+      const ignored =
+        state === "ignored" &&
+        e.processedAt !== undefined &&
+        (e.error ?? "").startsWith("ignored:") &&
+        MIRRORED_TYPES.test(e.eventType) &&
+        (!options.since || e.receivedAt >= options.since);
       if (parked || ignored) {
         delete e.finalState;
         delete e.processedAt;
@@ -116,6 +124,17 @@ export class MemoryPaddleStore implements PaddleStore {
       }
     }
     return n;
+  }
+
+  async parkExhaustedEvents(maxAttempts: number) {
+    const parked: { eventId: string; eventType: string; error: string }[] = [];
+    for (const [eventId, e] of this.events) {
+      if (e.processedAt === undefined && e.finalState === undefined && e.attempts >= maxAttempts) {
+        e.finalState = "gave_up";
+        parked.push({ eventId, eventType: e.eventType, error: e.error ?? "" });
+      }
+    }
+    return parked;
   }
 
   async upsertSubscription(row: SubscriptionRow) {
@@ -184,6 +203,15 @@ export class MemoryPaddleStore implements PaddleStore {
   async getPlanByPriceId(priceId: string) {
     return this.plans.get(priceId);
   }
+  async isClaimResult(resultId: string) {
+    return [...this.claims.values()].some((c) => c.resultId === resultId);
+  }
+  async listUnsettledClaims(olderThanMs: number) {
+    const cutoff = Date.now() - olderThanMs;
+    return [...this.claims.entries()]
+      .filter(([, c]) => c.resultId === null && c.claimedAt.getTime() <= cutoff)
+      .map(([claimKey, c]) => ({ claimKey, kind: c.kind, userId: c.userId, claimedAt: c.claimedAt }));
+  }
   async isCatalogProduct(productId: string) {
     return [...this.plans.values()].some((p) => p.productId === productId);
   }
@@ -212,9 +240,24 @@ export class MemoryPaddleStore implements PaddleStore {
   }
   async finishPendingPlanChange(subscriptionId: string, outcome: "applied" | "canceled", at: Date, note?: string) {
     const c = this.planChanges.get(subscriptionId);
-    if (!c || c.appliedAt !== null || c.canceledAt !== null) return;
+    if (!c || c.appliedAt !== null || c.canceledAt !== null) return false;
     if (outcome === "applied") c.appliedAt = at;
     else c.canceledAt = at;
     c.note = note ?? null;
+    return true;
+  }
+  async replanPendingPlanChange(subscriptionId: string, renewalAt: Date, applyAfter: Date) {
+    const c = this.planChanges.get(subscriptionId);
+    if (!c || c.appliedAt !== null || c.canceledAt !== null) return false;
+    c.renewalAt = renewalAt;
+    c.applyAfter = applyAfter;
+    return true;
+  }
+  async reopenPendingPlanChange(subscriptionId: string, appliedAt: Date, note: string) {
+    const c = this.planChanges.get(subscriptionId);
+    if (!c || c.canceledAt !== null || c.appliedAt?.getTime() !== appliedAt.getTime()) return false;
+    c.appliedAt = null;
+    c.note = note;
+    return true;
   }
 }
