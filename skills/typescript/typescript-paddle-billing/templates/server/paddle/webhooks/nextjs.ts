@@ -5,6 +5,11 @@
  * Read the body with `req.text()` so the raw bytes reach the verifier.
  * Do not use `req.json()` here. This route must run on the Node.js runtime
  * (node:crypto), so do not mark it `export const runtime = "edge"`.
+ *
+ * Serverless functions may be frozen right after the response is sent, so this processes
+ * before answering (keep hooks under Paddle's 5-second window). A failure answers 500 so Paddle
+ * retries; run the reprocess job (scripts/paddle/paddle-jobs.ts reprocess) on a schedule for what is
+ * still unprocessed when Paddle stops.
  */
 import type { PaddleWebhookHandler } from "./handler.js";
 
@@ -23,14 +28,11 @@ export function createPaddleWebhookRoute(getHandler: () => PaddleWebhookHandler)
     if (result.status !== 200) {
       return Response.json({ error: result.error }, { status: result.status });
     }
-    // Serverless functions may be frozen right after the response is sent, so process
-    // inline here (keep it under Paddle's 5-second window) or hand the event to a queue
-    // (e.g. a durable job) before returning. Do not fire-and-forget in serverless.
-    if (!result.duplicate) {
+    if (!result.duplicate && !result.parked) {
       try {
         await handler.process(result.payload);
       } catch {
-        // handler.process already recorded the error; a 500 makes Paddle retry this event.
+        // handler.process recorded the error; a 500 makes Paddle retry this event.
         return Response.json({ error: "processing failed" }, { status: 500 });
       }
     }

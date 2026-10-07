@@ -10,6 +10,8 @@
  *   past_due  → full access + "update your payment method" banner (Paddle is retrying)
  *   paused    → no paid access (or read-only, your choice)
  *   canceled  → no paid access
+ * Access also needs a price listed in plan_catalog: a subscription to a price the app does not sell
+ * (another app on the same Paddle account, or a price removed from the catalog) grants nothing.
  */
 import type { PaddleStore, SubscriptionRow } from "./store.js";
 
@@ -31,41 +33,38 @@ export interface Entitlement {
 }
 
 export async function getEntitlement(store: PaddleStore, userId: string): Promise<Entitlement> {
-  const subs = await store.listSubscriptionsForUser(userId);
-  // Prefer the subscription that grants access; among several, the most recently updated.
-  const granting = subs
-    .filter((s) => ACCESS_GRANTING_STATUSES.has(s.status))
-    .sort((a, b) => b.lastEventOccurredAt.getTime() - a.lastEventOccurredAt.getTime());
-  const sub = granting[0] ?? subs.sort((a, b) => b.lastEventOccurredAt.getTime() - a.lastEventOccurredAt.getTime())[0] ?? null;
+  const subs = (await store.listSubscriptionsForUser(userId)).sort((a, b) => b.lastEventOccurredAt.getTime() - a.lastEventOccurredAt.getTime());
 
-  if (!sub || !ACCESS_GRANTING_STATUSES.has(sub.status)) {
-    return { hasAccess: false, tier: null, features: {}, quantity: 0, paymentPastDue: false, endsAt: null, subscription: sub };
-  }
-
-  let tier: string | null = null;
-  let features: Record<string, unknown> = {};
-  for (const priceId of sub.priceIds) {
-    const plan = await store.getPlanByPriceId(priceId);
-    if (plan) {
-      tier = tier ?? plan.tierKey;
-      features = { ...features, ...plan.features };
+  // The first access-granting subscription (most recently updated first) whose prices name a catalog tier.
+  for (const sub of subs) {
+    if (!ACCESS_GRANTING_STATUSES.has(sub.status)) continue;
+    let tier: string | null = null;
+    let features: Record<string, unknown> = {};
+    for (const priceId of sub.priceIds) {
+      const plan = await store.getPlanByPriceId(priceId);
+      if (plan) {
+        tier = tier ?? plan.tierKey;
+        features = { ...features, ...plan.features };
+      }
     }
+    if (tier === null) continue;
+    return {
+      hasAccess: true,
+      tier,
+      features,
+      quantity: sub.quantity,
+      paymentPastDue: sub.status === "past_due",
+      endsAt: sub.scheduledChangeAction === "cancel" || sub.scheduledChangeAction === "pause" ? sub.scheduledChangeEffectiveAt : null,
+      subscription: sub,
+    };
   }
-  return {
-    hasAccess: true,
-    tier,
-    features,
-    quantity: sub.quantity,
-    paymentPastDue: sub.status === "past_due",
-    endsAt: sub.scheduledChangeAction === "cancel" || sub.scheduledChangeAction === "pause" ? sub.scheduledChangeEffectiveAt : null,
-    subscription: sub,
-  };
+  return { hasAccess: false, tier: null, features: {}, quantity: 0, paymentPastDue: false, endsAt: null, subscription: subs[0] ?? null };
 }
 
-/** One-time purchases: has this user a completed transaction containing the product? */
+/** One-time purchases: has this user a purchased line of the product that was not refunded? */
 export async function hasPurchased(store: PaddleStore, userId: string, productId: string): Promise<boolean> {
   const purchases = await store.listPurchasesForUser(userId);
-  return purchases.some((p) => p.status === "completed" && p.productIds.includes(productId));
+  return purchases.some((p) => p.items.some((i) => i.productId === productId && i.refundedAt === null));
 }
 
 /**

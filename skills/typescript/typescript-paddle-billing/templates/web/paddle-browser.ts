@@ -77,10 +77,10 @@ export async function openCheckout(
   if (!paddle) throw new Error("Paddle.js failed to load (blocked script or wrong token/environment)");
   const options: CheckoutOpenOptions = {
     items: input.items,
-    customer: input.customer,
     customData: { user_id: input.userId },
-    discountCode: input.discountCode,
-    settings: input.successUrl ? { successUrl: input.successUrl } : undefined,
+    ...(input.customer ? { customer: input.customer } : {}),
+    ...(input.discountCode ? { discountCode: input.discountCode } : {}),
+    ...(input.successUrl ? { settings: { successUrl: input.successUrl } } : {}),
   };
   paddle.Checkout.open(options);
 }
@@ -90,6 +90,18 @@ export async function openTransactionCheckout(config: PaddleBrowserConfig, trans
   const paddle = await getPaddle(config);
   if (!paddle) throw new Error("Paddle.js failed to load");
   paddle.Checkout.open({ transactionId });
+}
+
+/**
+ * Add or update the card on a subscription: open the transaction from
+ * getUpdatePaymentMethodTransaction (server) / POST /api/billing/subscription/:id/payment-method.
+ * Uses the one-page checkout: Paddle requires it for cardless trials ("Cardless trial subscriptions
+ * are only supported by one-page checkout variant") and it works for every other subscription too.
+ */
+export async function openPaymentMethodCheckout(config: PaddleBrowserConfig, transactionId: string): Promise<void> {
+  const paddle = await getPaddle(config);
+  if (!paddle) throw new Error("Paddle.js failed to load");
+  paddle.Checkout.open({ transactionId, settings: { variant: "one-page" } });
 }
 
 /**
@@ -108,7 +120,7 @@ export async function openInlineCheckout(
   if (!paddle) throw new Error("Paddle.js failed to load");
   paddle.Checkout.open({
     items: input.items,
-    customer: input.customer,
+    ...(input.customer ? { customer: input.customer } : {}),
     customData: { user_id: input.userId },
     settings: {
       displayMode: "inline",

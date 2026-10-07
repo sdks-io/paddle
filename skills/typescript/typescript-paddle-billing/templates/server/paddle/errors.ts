@@ -16,7 +16,7 @@ export interface PaddleErrorInfo {
   status: number;
   /** Paddle error code, e.g. "not_found", "subscription_update_when_past_due". Undefined when the body was not Paddle's error shape. */
   code: string | undefined;
-  /** Human-readable detail from Paddle. Show to operators, not to end users verbatim. */
+  /** Free-text detail from Paddle. Log it with requestId; the API answers the caller with code and fieldErrors instead. */
   detail: string | undefined;
   /** Field-level validation messages (code "invalid_field"). */
   fieldErrors: { field: string; message: string }[];
@@ -26,7 +26,11 @@ export interface PaddleErrorInfo {
   documentationUrl: string | undefined;
 }
 
-/** Returns Paddle's error details when `err` is an API error from the SDK; otherwise undefined. */
+/**
+ * Returns Paddle's error details when `err` is an API error from the SDK; otherwise undefined.
+ * Every operation of this SDK declares the same two error arms (`errorResponse` and `undeclared`,
+ * per the SDK map), so one reader serves them all.
+ */
 export function paddleError(err: unknown): PaddleErrorInfo | undefined {
   if (!(err instanceof ApiError)) return undefined;
   const payload = err.payload as { kind: string; body?: unknown };
@@ -52,29 +56,88 @@ export function isRateLimited(err: unknown): boolean {
 }
 
 /**
- * Map a Paddle failure to the HTTP answer your own API should give. Messages are
- * fixed; Paddle's `detail` and field errors are for logs and operators, so log
- * them with `requestId` (`paddleError(err)`) before answering.
- * - Validation and state errors (4xx other than 401/403/429): the status and
- *   Paddle's `code`, so the frontend can show its own message for that code.
- * - 401/403: your key is wrong or lacks a permission → 502.
- * - 429 → 503; 5xx or transport → 502.
+ * How a failed write ended. Decides what the write's own catch does (writes.ts):
+ * - "refused":  Paddle answered 4xx; nothing changed. Release the claim, tell the caller why.
+ * - "unknown":  Paddle may have acted (connection lost, timeout, 5xx, or a 2xx whose body could not
+ *               be read). Re-read by the reference that was sent before reporting anything.
+ * - "not_sent": the request never left (credential not obtained, a value that would not encode,
+ *               or an error in our own code). Nothing to re-read; release the claim.
  */
-export function toHttpAnswer(err: unknown): { status: number; body: { error: string; code?: string; requestId?: string } } {
+export type WriteOutcome = "refused" | "unknown" | "not_sent";
+
+export function writeOutcome(err: unknown): WriteOutcome {
+  if (err instanceof ApiError) return err.status >= 500 ? "unknown" : "refused";
+  if (err instanceof PaddleApiError) {
+    return err.kind === "connection" || err.kind === "timeout" || err.kind === "decode" ? "unknown" : "not_sent";
+  }
+  return "not_sent";
+}
+
+/**
+ * A write whose outcome could not be settled: Paddle may or may not have applied it, and a
+ * re-read did not find it (or failed too). The claim stays, so a repeat does not write twice.
+ * Never report this as "failed".
+ */
+export class OutcomeUnknownError extends Error {
+  constructor(
+    public readonly operation: string,
+    public readonly reference: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`${operation}: Paddle did not confirm the outcome (reference ${reference}); it may have been applied`, options);
+    this.name = "OutcomeUnknownError";
+  }
+}
+
+export interface HttpAnswer {
+  status: number;
+  body: {
+    error: string;
+    code?: string;
+    /** Paddle's field-level messages, for the caller to fix what they sent. */
+    fields?: { field: string; message: string }[];
+    /** "unknown" when a write may or may not have been applied. */
+    outcome?: "unknown";
+    requestId?: string;
+  };
+}
+
+/**
+ * Map a Paddle failure to the HTTP answer your own API gives (the routing skill's table 1b.4).
+ * Log `paddleError(err)` (including `detail`) with the requestId before answering.
+ * - 4xx other than 401/403/429: the same status, Paddle's `code` and field messages, so the caller
+ *   learns what to change. Paddle's free-text `detail` stays in the log.
+ * - 401/403 → 502 (our credentials); 429 → 503 (our quota); 5xx → 502.
+ * - A write whose outcome is unknown (OutcomeUnknownError) → 502 with outcome "unknown", never "failed".
+ * - No response on a read → 502.
+ */
+export function toHttpAnswer(err: unknown): HttpAnswer {
+  if (err instanceof OutcomeUnknownError) {
+    return {
+      status: 502,
+      body: { error: "The payment provider did not confirm the outcome. It may have been applied; check before trying again.", outcome: "unknown" },
+    };
+  }
   const info = paddleError(err);
   if (!info) {
-    return isTransportFailure(err)
-      ? { status: 502, body: { error: "Payment provider unreachable" } }
-      : { status: 500, body: { error: "Unexpected error" } };
+    if (isTransportFailure(err)) return { status: 502, body: { error: "Payment provider unreachable" } };
+    // A Paddle answer the SDK could not read (on a read; writes turn it into OutcomeUnknownError).
+    if (err instanceof PaddleApiError && err.kind === "decode") return { status: 502, body: { error: "Payment provider answer could not be read" } };
+    return { status: 500, body: { error: "Unexpected error" } };
   }
+  const ids = { ...(info.code ? { code: info.code } : {}), ...(info.requestId ? { requestId: info.requestId } : {}) };
   if (info.status === 401 || info.status === 403) {
-    return { status: 502, body: { error: "Payment provider credentials are not valid for this operation", code: info.code, requestId: info.requestId } };
+    return { status: 502, body: { error: "Payment provider credentials are not valid for this operation", ...ids } };
   }
   if (info.status === 429) {
-    return { status: 503, body: { error: "Payment provider rate limit reached, retry shortly", code: info.code, requestId: info.requestId } };
+    return { status: 503, body: { error: "Payment provider rate limit reached, retry shortly", ...ids } };
   }
   if (info.status >= 500) {
-    return { status: 502, body: { error: "Payment provider error", code: info.code, requestId: info.requestId } };
+    return { status: 502, body: { error: "Payment provider error", ...ids } };
   }
-  return { status: info.status, body: { error: "Request rejected by payment provider", code: info.code, requestId: info.requestId } };
+  const reason = info.fieldErrors.length > 0 ? info.fieldErrors.map((f) => `${f.field}: ${f.message}`).join("; ") : info.code ?? "rejected";
+  return {
+    status: info.status,
+    body: { error: `Rejected by the payment provider: ${reason}`, ...ids, ...(info.fieldErrors.length > 0 ? { fields: info.fieldErrors } : {}) },
+  };
 }

@@ -8,11 +8,12 @@ Paddle constraints that apply to every change: no change within 30 minutes of `n
 
 ## Upgrade or downgrade (change plan)
 
-Needs: `sub_…`, current items (from the row or `getSubscriptionWithNext`), target `pri_…`. Produces: a new plan, optional immediate transaction.
+Needs: `sub_…`, current status and items (`currentSubscription`), target `pri_…`. Produces: a new plan, optional immediate transaction.
 
-1. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
-2. Preview so the customer sees the money: `changePlan(subId, [{ priceId: newPriceId, quantity }], mode, { preview: true })`. Read `preview.immediateTransaction` (charge or credit now), `preview.nextTransaction` (next invoice), `preview.updateSummary`.
-3. Apply with the same arguments without `preview`.
+1. Read the subscription from Paddle: `currentSubscription(subId)` gives the status and the complete item list. Do not decide from the mirror row: it follows a change only when the change's webhook arrives, and a second change seconds after the first would be decided against the old plan.
+2. Decide the mode on the server: `mode = await chooseProrationMode({ status, priceId: currentPriceId, quantity }, { priceId: newPriceId, quantity })` applies the table below. Never take the mode from the browser.
+3. Preview so the customer sees the money: `changePlan(subId, items, mode, { preview: true })`, where `items` is the complete list with the base plan replaced (`routes.express.ts` does this). Show `preview.updateSummary.result` (`action` `charge` or `credit`, and the amount: Paddle's summary of this change) and the totals of `preview.immediateTransaction` (due now) and `preview.nextTransaction` (next bill). A downgrade's credit goes to the customer's credit balance, so it shows only in the summary, never as a negative bill.
+4. Apply with the same arguments without `preview`.
 
 Choosing `mode` (`proration_billing_mode`):
 
@@ -24,15 +25,29 @@ Choosing `mode` (`proration_billing_mode`):
 | Change during trial | `do_not_bill` | the only mode allowed while `trialing`; price takes effect at trial end |
 | Change while paused | `do_not_bill` | the only mode allowed while `paused` |
 | Free change (goodwill) | `do_not_bill` | no charge, no credit; the owner's decision, never from a customer request |
+| Change at the end of the term (e.g. yearly → monthly, or a downgrade the customer keeps paying the higher tier for until renewal) | none now | `requestPlanChangeAtRenewal`; see "Change at the end of the term" |
 
-Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]`. Credits larger than the charge are added to the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, the default `on_payment_failure: "prevent_change"` keeps the old plan; tell the customer to update the payment method.
+Keep add-ons by listing them: `[{ priceId: newBase, quantity }, { priceId: addOn, quantity: 1 }]` (`routes.express.ts` reads the current items with `currentSubscription` and replaces only the base plan). Credits larger than the charge are added to the customer's credit balance (`client.customers.listCreditBalances`) and are used automatically on later invoices. If the immediate charge fails, Paddle's default (`on_payment_failure: "prevent_change"`) keeps the old plan; tell the customer to update the payment method. `changePlan` sends `on_payment_failure` only when called with `applyEvenIfPaymentFails`.
+
+## Change at the end of the term
+
+Paddle cannot schedule an item or price change: `scheduled_change` covers only cancel, pause and resume, and a billing-cycle change accepts only `prorated_immediately`, `full_immediately` or `do_not_bill`, all applied at once. Applying yearly → monthly now with `do_not_bill` ends the paid year early: in testing, Paddle moved the next bill from 2027-10-05 to 2026-11-05, so the customer lost the rest of the year they had paid for. So the app keeps the request and applies it shortly before the renewal.
+
+Needs: `sub_…` (active, no scheduled cancel or pause), target `pri_…` from `plan_catalog`. Produces: a `paddle_pending_plan_changes` row, then the changed subscription at renewal.
+
+1. `POST /api/billing/subscription/:id/change-at-renewal` → `requestPlanChangeAtRenewal(store, { subscriptionId, userId, items })` stores the complete item list and the renewal date (`next_billed_at`). Nothing changes in Paddle; the entitlement route shows `changeAtRenewal`. `DELETE` on the same path cancels it.
+2. Schedule `paddle-jobs.ts plan-changes` (or `applyDuePlanChanges(store)`) at least every 15 minutes. Between 2 hours and 35 minutes before the renewal it applies the change:
+    - same billing cycle (a downgrade): `do_not_bill`; the renewal then bills the new price;
+    - different billing cycle (yearly ↔ monthly): `full_immediately`; the new price is charged at once and a new term starts then, at most two hours before the old one would have ended. Those minutes are not credited.
+3. The job cancels the pending change when the subscription is no longer active or has a scheduled cancel or pause, and re-plans it when the renewal date moved (trial extended, date changed). A plan change applied now (`/change`) cancels the pending one: applying the older list at renewal would undo it.
+4. `subscription.updated` arrives as for any change; the mirror follows.
 
 ## Trials
 
 - Extend: `setNextBilledAt(subId, newDate)` (≥ 30 minutes ahead; uses `do_not_bill`).
 - Convert early: `activateTrialNow(subId)` charges now and sets `active` (automatic collection only).
 - Change plan during trial: `changePlan(..., "do_not_bill")`.
-- Cardless trial payment method: `getUpdatePaymentMethodTransaction(subId)` → `Paddle.Checkout.open({ transactionId, settings: { variant: "one-page" } })`.
+- Cardless trial payment method: `getUpdatePaymentMethodTransaction(subId)` → `openPaymentMethodCheckout(config, transactionId)`, which sets the one-page variant Paddle requires for cardless trials.
 
 ## Cancel
 
@@ -47,11 +62,12 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 
 - `pauseSubscription(subId)` → scheduled at the end of the period (`scheduled_change.action = "pause"`); `{ when: "immediately" }` pauses now. Add `resumeAt` for an automatic resume. `onResume` decides whether resume starts a new billing period (default; charges on resume) or continues the paused one.
 - `resumeSubscription(subId)` resumes now and charges when a new period starts; `resumeSubscription(subId, date)` schedules it. Resuming needs a payment method on file.
-- Access while paused: none by default (entitlement), or read-only if the user prefers; `current_billing_period` is null while paused and canceled; read `next_billed_at` from the payload rather than assuming it.
+- Access while paused: none by default (entitlement), or read-only if the user prefers; decide from `status`, not from `current_billing_period` (in testing a subscription paused at once kept the period it was paused in); `next_billed_at` is the resume date when one is set; read it from the payload rather than assuming it.
+- A plan change while paused (`do_not_bill`) leaves the new items `inactive` until the subscription resumes; they are still its items (`subscriptionItems` in `webhooks/types.ts` keeps them for a paused subscription).
 
 ## Payment method update and past_due
 
-- Self-service: portal `updatePaymentMethodUrl`, or `getUpdatePaymentMethodTransaction(subId)` → `Paddle.Checkout.open({ transactionId })` in the app. For an active subscription it is a zero-value transaction; for a `past_due` one it is the unpaid transaction, so completing it also pays the overdue amount.
+- Self-service: portal `updatePaymentMethodUrl`, or `POST /api/billing/subscription/:id/payment-method` → `openPaymentMethodCheckout(config, transactionId)` in the app. For an active subscription it is a zero-value transaction; for a `past_due` one it is the unpaid transaction, so completing it also pays the overdue amount.
 - `past_due`: Paddle retries automatically (without Retain up to seven times over 30 days, then cancels; with Retain, configurable). `subscription.past_due` and `transaction.payment_failed` arrive; show the banner, keep access, email the customer. No API changes are possible until the subscription is active again.
 
 ## Change billing date
@@ -60,7 +76,7 @@ Needs: `sub_…`, the user's choice. Produces: `scheduled_change.action = "cance
 
 ## Discounts on an existing subscription
 
-`client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`); remove it with `discount: null` (or in the dashboard). See recipe 06 for creating discounts.
+`client.subscriptions.updateSubscription` with a `discount` that has the `dsc_…` ID and `effectiveFrom: "next_billing_period"` (fields: `map/operations/subscriptions.md`); remove it with `discount: null` (or in the dashboard). A plan change to items a restricted discount (`restrict_to`) does not cover removes the discount from the subscription, and changing back does not restore it (seen in testing); warn the customer in the preview step when their discount would end. See recipe 06 for creating discounts.
 
 ## Checks
 

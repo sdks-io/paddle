@@ -21,8 +21,10 @@ export type PaddleEnvironment = "sandbox" | "production";
 export interface PaddleConfig {
   environment: PaddleEnvironment;
   apiKey: string;
-  /** API base URL: https://sandbox-api.paddle.com or https://api.paddle.com */
+  /** API base URL this deployment reaches: https://sandbox-api.paddle.com or https://api.paddle.com (or the override). */
   apiBaseUrl: string;
+  /** PADDLE_API_URL when set; client.ts passes it as the base URL of the selected environment. */
+  apiUrlOverride: string | undefined;
   /** Endpoint secret key of the webhook destination; undefined when webhooks are not wired yet. */
   webhookSecret: string | undefined;
   /** Max age of a webhook signature timestamp, in seconds. Paddle's SDKs default to 5. */
@@ -34,8 +36,8 @@ const API_BASE_URLS: Record<PaddleEnvironment, string> = {
   production: "https://api.paddle.com",
 };
 
-function required(name: string): string {
-  const value = process.env[name];
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name];
   if (!value || value.trim() === "") {
     throw new Error(`Paddle config: ${name} is not set`);
   }
@@ -49,7 +51,7 @@ export function loadPaddleConfig(env: NodeJS.ProcessEnv = process.env): PaddleCo
   }
   const environment: PaddleEnvironment = rawEnv;
 
-  const apiKey = required("PADDLE_API_KEY");
+  const apiKey = required(env, "PADDLE_API_KEY");
   // Key format (Paddle docs): pdl_live_apikey_... for live, pdl_sdbx_apikey_... for sandbox.
   const keyIsSandbox = apiKey.startsWith("pdl_sdbx_");
   const keyIsLive = apiKey.startsWith("pdl_live_");
@@ -70,10 +72,12 @@ export function loadPaddleConfig(env: NodeJS.ProcessEnv = process.env): PaddleCo
     throw new Error("Paddle config: PADDLE_WEBHOOK_TOLERANCE_SECONDS must be a positive number");
   }
 
+  const apiUrlOverride = env.PADDLE_API_URL?.trim() || undefined;
   return {
     environment,
     apiKey,
-    apiBaseUrl: env.PADDLE_API_URL?.trim() || API_BASE_URLS[environment],
+    apiBaseUrl: apiUrlOverride ?? API_BASE_URLS[environment],
+    apiUrlOverride,
     webhookSecret,
     webhookToleranceSeconds: tolerance,
   };

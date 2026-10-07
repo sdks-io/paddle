@@ -1,0 +1,168 @@
+{
+  "event_id": "evt_01m46k76w561b2a7bjr09dwddf",
+  "event_type": "subscription.created",
+  "occurred_at": "2026-10-05T17:54:08.389+00:00",
+  "notification_id": "ntf_x",
+  "data": {
+    "id": "sub_01m46k76hwk5ssavwyz8z72psh",
+    "items": [
+      {
+        "price": {
+          "id": "pri_01m46f6ds7ehnq90azrb7awfjf",
+          "name": "Yearly membership",
+          "type": "standard",
+          "status": "active",
+          "quantity": {
+            "maximum": 100,
+            "minimum": 1
+          },
+          "tax_mode": "location",
+          "created_at": "2026-10-05T16:43:48.391Z",
+          "product_id": "pro_01m46f6d7fn38nxje620j6yy0e",
+          "unit_price": {
+            "amount": "9900",
+            "currency_code": "USD"
+          },
+          "updated_at": "2026-10-05T16:45:37.326136Z",
+          "custom_data": {
+            "seed_key": "coursely-membership-yearly"
+          },
+          "description": "Coursely Membership, yearly",
+          "import_meta": null,
+          "trial_period": null,
+          "billing_cycle": {
+            "interval": "year",
+            "frequency": 1
+          },
+          "unit_price_overrides": [
+            {
+              "unit_price": {
+                "amount": "9900",
+                "currency_code": "EUR"
+              },
+              "country_codes": [
+                "AT",
+                "BE",
+                "CY",
+                "DE",
+                "EE",
+                "ES",
+                "FI",
+                "FR",
+                "GR",
+                "HR",
+                "IE",
+                "IT",
+                "LT",
+                "LU",
+                "LV",
+                "MT",
+                "NL",
+                "PT",
+                "SI",
+                "SK"
+              ]
+            },
+            {
+              "unit_price": {
+                "amount": "8500",
+                "currency_code": "GBP"
+              },
+              "country_codes": [
+                "GB"
+              ]
+            },
+            {
+              "unit_price": {
+                "amount": "13500",
+                "currency_code": "CAD"
+              },
+              "country_codes": [
+                "CA"
+              ]
+            },
+            {
+              "unit_price": {
+                "amount": "14900",
+                "currency_code": "AUD"
+              },
+              "country_codes": [
+                "AU"
+              ]
+            },
+            {
+              "unit_price": {
+                "amount": "14800",
+                "currency_code": "JPY"
+              },
+              "country_codes": [
+                "JP"
+              ]
+            },
+            {
+              "unit_price": {
+                "amount": "799900",
+                "currency_code": "INR"
+              },
+              "country_codes": [
+                "IN"
+              ]
+            }
+          ]
+        },
+        "status": "active",
+        "product": {
+          "id": "pro_01m46f6d7fn38nxje620j6yy0e",
+          "name": "Coursely Membership",
+          "type": "standard",
+          "status": "active",
+          "image_url": null,
+          "created_at": "2026-10-05T16:43:47.823Z",
+          "updated_at": "2026-10-05T16:45:36.781Z",
+          "custom_data": {
+            "seed_key": "coursely-membership"
+          },
+          "description": "One year of access to every Coursely lesson. Renews yearly.",
+          "tax_category": "standard"
+        },
+        "quantity": 1,
+        "recurring": true,
+        "created_at": "2026-10-05T17:54:08.06Z",
+        "updated_at": "2026-10-05T17:54:08.06Z",
+        "trial_dates": null,
+        "next_billed_at": "2027-10-05T17:54:07.44069Z",
+        "previously_billed_at": "2026-10-05T17:54:07.44069Z"
+      }
+    ],
+    "status": "active",
+    "discount": null,
+    "paused_at": null,
+    "address_id": "add_01m46k6xsngepg6966z9pn8byy",
+    "created_at": "2026-10-05T17:54:08.06Z",
+    "started_at": "2026-10-05T17:54:07.44069Z",
+    "updated_at": "2026-10-05T17:54:08.06Z",
+    "business_id": null,
+    "canceled_at": null,
+    "custom_data": {
+      "user_id": "ebb9191a-0695-4a16-8510-9ab69ad30a21"
+    },
+    "customer_id": "ctm_01m46k6t9e1eawhz3djhkc7k77",
+    "import_meta": null,
+    "billing_cycle": {
+      "interval": "year",
+      "frequency": 1
+    },
+    "currency_code": "USD",
+    "next_billed_at": "2027-10-05T17:54:07.44069Z",
+    "transaction_id": "txn_01m46k6tbqkknvthcgqamwjtw6",
+    "billing_details": null,
+    "collection_mode": "automatic",
+    "first_billed_at": "2026-10-05T17:54:07.44069Z",
+    "scheduled_change": null,
+    "consent_requirements": [],
+    "current_billing_period": {
+      "ends_at": "2027-10-05T17:54:07.44069Z",
+      "starts_at": "2026-10-05T17:54:07.44069Z"
+    }
+  }
+}

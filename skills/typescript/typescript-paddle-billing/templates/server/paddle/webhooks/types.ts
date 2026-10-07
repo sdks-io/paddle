@@ -54,6 +54,15 @@ export type SubscriptionEvent =
 export type AdjustmentEvent = AdjustmentCreatedRequest | AdjustmentUpdatedRequest;
 
 export type WebhookSubscription = SubscriptionEvent["data"];
+
+/**
+ * The subscription's items, for the mirror and for an update's complete item list. Items are `inactive`
+ * while they do not bill: on a paused subscription, items set during the pause stay `inactive` until it
+ * resumes and are still its items; otherwise an inactive item is not part of the plan.
+ */
+export function subscriptionItems<T extends { status?: string | null }>(sub: { status: string; items: T[] }): T[] {
+  return sub.status === "paused" ? sub.items : sub.items.filter((i) => i.status !== "inactive");
+}
 export type WebhookTransaction = TransactionCompletedRequest["data"] | TransactionPaymentFailedRequest["data"];
 export type WebhookAdjustment = AdjustmentEvent["data"];
 

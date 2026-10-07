@@ -20,6 +20,9 @@
  *   ]
  * }
  *
+ * Quantity: a price without "quantity" gets { minimum: 1, maximum: 1 }, so the checkout shows no
+ * quantity picker. Give seat prices and packs a range, e.g. "quantity": { "minimum": 1, "maximum": 500 }.
+ *
  * Idempotent: each product/price carries custom_data.seed_key; a rerun finds
  * them by that key and updates instead of duplicating. Paddle cannot delete
  * catalog entities, so duplicates would be permanent clutter.
@@ -43,7 +46,7 @@ interface SeedPrice {
   billingCycle: Duration | null;
   trialPeriod?: PriceTrialDuration1;
   taxMode?: "account_setting" | "internal" | "external" | "location";
-  quantity?: { minimum?: number; maximum?: number };
+  quantity?: { minimum: number; maximum: number };
 }
 interface SeedProduct {
   key: string;
@@ -62,8 +65,8 @@ async function main(): Promise<void> {
   const client = getPaddleClient();
   console.error(`Seeding Paddle catalog in ${config.environment} (${config.apiBaseUrl})`);
 
-  const existingProducts = await listAll((after) => client.products.listProducts({ status: ["active", "archived"], perPage: 200, after }));
-  const existingPrices = await listAll((after) => client.prices.listPrices({ status: ["active", "archived"], perPage: 200, after }));
+  const existingProducts = await listAll((after) => client.products.listProducts({ status: ["active", "archived"], perPage: 200, ...(after ? { after } : {}) }));
+  const existingPrices = await listAll((after) => client.prices.listPrices({ status: ["active", "archived"], perPage: 200, ...(after ? { after } : {}) }));
   const seedKey = (customData: Record<string, unknown> | null | undefined) =>
     typeof customData?.["seed_key"] === "string" ? (customData["seed_key"] as string) : undefined;
 
@@ -72,16 +75,22 @@ async function main(): Promise<void> {
 
   for (const p of catalog.products) {
     let product = existingProducts.find((e) => seedKey(e.customData) === p.key);
+    const productFields = {
+      name: p.name,
+      taxCategory: p.taxCategory,
+      ...(p.description !== undefined ? { description: p.description } : {}),
+      ...(p.imageUrl !== undefined ? { imageUrl: p.imageUrl } : {}),
+    };
     if (product) {
       const updated = await client.products.updateProduct({
         productId: product.id,
-        body: { name: p.name, description: p.description, taxCategory: p.taxCategory, imageUrl: p.imageUrl, status: "active" },
+        body: { ...productFields, status: "active" },
       });
       product = updated.data;
       console.error(`= product ${p.key} ${product.id} (updated)`);
     } else {
       const created = await client.products.createProduct({
-        body: { name: p.name, description: p.description, taxCategory: p.taxCategory, imageUrl: p.imageUrl, customData: { seed_key: p.key } },
+        body: { ...productFields, customData: { seed_key: p.key } },
       });
       product = created.data;
       console.error(`+ product ${p.key} ${product.id}`);
@@ -90,37 +99,27 @@ async function main(): Promise<void> {
 
     for (const pr of p.prices) {
       const found = existingPrices.find((e) => seedKey(e.customData) === pr.key && e.productId === product!.id);
+      const priceFields = {
+        description: pr.description,
+        unitPrice: { amount: pr.amount, currencyCode: pr.currencyCode },
+        quantity: pr.quantity ?? { minimum: 1, maximum: 1 },
+        ...(pr.name !== undefined ? { name: pr.name } : {}),
+        ...(pr.billingCycle ? { billingCycle: pr.billingCycle } : {}), // omitted for one-time prices
+        ...(pr.trialPeriod !== undefined ? { trialPeriod: pr.trialPeriod } : {}),
+        ...(pr.taxMode !== undefined ? { taxMode: pr.taxMode } : {}),
+      };
       if (found) {
         // Advice: when a plan already has subscribers, prefer creating a new price and archiving the old one over
         // editing unit_price/billing_cycle/trial_period in place, so existing terms are unambiguous.
         const updated = await client.prices.updatePrice({
           priceId: found.id,
-          body: {
-            description: pr.description,
-            name: pr.name,
-            unitPrice: { amount: pr.amount, currencyCode: pr.currencyCode },
-            billingCycle: pr.billingCycle ?? undefined,
-            trialPeriod: pr.trialPeriod,
-            taxMode: pr.taxMode,
-            quantity: pr.quantity,
-            status: "active",
-          },
+          body: { ...priceFields, status: "active" },
         });
         ids.prices[pr.key] = updated.data.id;
         console.error(`  = price ${pr.key} ${updated.data.id} (updated)`);
       } else {
         const created = await client.prices.createPrice({
-          body: {
-            productId: product.id,
-            description: pr.description,
-            name: pr.name,
-            unitPrice: { amount: pr.amount, currencyCode: pr.currencyCode },
-            billingCycle: pr.billingCycle ?? undefined, // omit for one-time prices
-            trialPeriod: pr.trialPeriod,
-            taxMode: pr.taxMode,
-            quantity: pr.quantity,
-            customData: { seed_key: pr.key },
-          },
+          body: { ...priceFields, productId: product.id, customData: { seed_key: pr.key } },
         });
         ids.prices[pr.key] = created.data.id;
         console.error(`  + price ${pr.key} ${created.data.id}`);

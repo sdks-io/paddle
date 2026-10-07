@@ -30,10 +30,12 @@ Rules: `items` must list every item on the subscription (a single-item plan is t
 Needs: a one-time price for the unit (`billingCycle: null`, e.g. "1,000 extra API calls", amount per unit) or an inline price; the user's `sub_…`. Produces: a transaction with `origin: "subscription_charge"`.
 
 ```ts
-await chargeOneOff(subId, [{ priceId: overagePriceId, quantity: units }], "immediately");
+await chargeOneOff(store, subId, [{ priceId: overagePriceId, quantity: units }], "immediately", { ref: `overage:${batchId}` });
 // or a computed amount without a catalog price:
-await chargeOneOff(subId, [{ description: "Usage 2026-10", productId: usageProductId, amount: "1250", currencyCode: "USD", quantity: 1 }], "immediately");
+await chargeOneOff(store, subId, [{ description: "Usage 2026-10", productId: usageProductId, amount: "1250", currencyCode: "USD", quantity: 1 }], "immediately", { ref: "usage:2026-10" });
 ```
+
+`ref` names what is being charged; a second call with the same `ref` (a retried job, a double click) does not charge again. Add a `plan_catalog` row for the overage price so its transactions are recognised as this app's.
 
 Preview first with `{ preview: true }` when showing the amount to the customer. Limits: 20 immediate charges per hour and 100 per 24 hours per subscription, so batch usage (daily, or at a threshold) rather than per request. The charge uses the stored payment method; if the payment fails, `transaction.payment_failed` arrives and the default `on_payment_failure: "prevent_change"` leaves the subscription unchanged. Fulfilment: `transaction.completed` with `subscription_id` set and `origin: "subscription_charge"` — the handler passes it to the `onSubscriptionTransactionCompleted(tx)` hook; record overage payments there when `tx.origin === "subscription_charge"`.
 
@@ -41,7 +43,7 @@ Preview first with `{ preview: true }` when showing the amount to the customer. 
 
 Needs: same as B. Produces: one or more one-time lines added to the next renewal transaction.
 
-Once per period (a cron before the renewal, outside the 30-minute lock), compute usage and call `chargeOneOff(subId, items, "next_billing_period")`. The items are billed with the renewal; nothing is charged now. Repeated calls add further lines; keep a `(subscription_id, period)` record in the app so a retried job does not add usage twice (Paddle documents no idempotency key for this call). Check what will be billed with `getSubscriptionWithNext(subId).nextTransaction`.
+Once per period (a cron before the renewal, outside the 30-minute lock), compute usage and call `chargeOneOff(store, subId, items, "next_billing_period", { ref: "usage:" + period })`. The items are billed with the renewal; nothing is charged now. Repeated calls with another `ref` add further lines; the same `ref` is charged once (its claim row is the `(subscription, period)` record). Check what will be billed with `getSubscriptionWithNext(subId).nextTransaction`.
 
 A base plan may be a $0 recurring price so that the customer's renewal consists of usage only.
 
@@ -49,9 +51,9 @@ A base plan may be a $0 recurring price so that the customer's renewal consists 
 
 Needs: one-time prices for the packs (recipe 02), `credit_ledger` table. Produces: an app-side balance.
 
-1. Sell packs with checkout; on `transaction.completed` (one-time), `onPurchaseCompleted` adds `+credits × quantity` for each pack in its `items` to `credit_ledger` with `transactionId` and reason `purchase`. The `UNIQUE(transaction_id, reason)` constraint makes a redelivered webhook harmless.
-2. Deduct with `store.addCredits({ userId, delta: -n, reason: "usage" })` inside the request that consumes them; refuse when `store.getCreditBalance(userId) < n`.
-3. On a refund (`adjustment.updated`, `status: "approved"`, `action: "refund"`), add a negative `refund` entry for that `transactionId`.
+1. Sell packs with checkout; give each pack price a `plan_catalog` row with `features: { "credits": 100 }`. On `transaction.completed`, `onPurchaseCompleted(purchase)` adds `+credits × line.quantity` for each line of `purchase.items` to `credit_ledger` with `transactionId`, reason `purchase` and `ref: line.lineItemId`. The unique `(transaction_id, reason, ref)` index makes a redelivered webhook harmless while several packs in one checkout each count.
+2. Deduct with `store.addCredits({ userId, delta: -n, reason: "usage" })` inside the request that consumes them; refuse when `store.getCreditBalance(userId) < n` (in a database transaction when two requests may spend at once).
+3. On an approved refund or a chargeback, the handler marks the lines and calls `onPurchaseRefunded(purchase, refundedItems, adjustment)`: add `-credits × quantity` per refunded line with reason `refund` and `ref: adjustment.id + ":" + line.lineItemId`. (`templates/tests/webhook-handler.test.mts` shows both hooks.)
 4. Show the balance and a "buy more" button; optionally auto-top-up with pattern B when a subscription exists.
 
 Credits never expire unless the app enforces it; say so to the user, since some jurisdictions regulate expiring prepaid credits.
