@@ -131,7 +131,7 @@ export async function changePlan(
 
 /**
  * Proration mode for a plan or seat change the customer asked for, decided on the server
- * (recipe 04, "Choosing mode"). Never accept the mode from the browser: "do_not_bill" would make
+ * (recipe 04, "Upgrade or downgrade (change plan)", step 2). Never accept the mode from the browser: "do_not_bill" would make
  * an upgrade free. A free change as goodwill is the owner's decision; call changePlan directly for it.
  */
 export async function chooseProrationMode(
