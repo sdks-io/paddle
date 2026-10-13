@@ -103,7 +103,7 @@ export interface HttpAnswer {
 }
 
 /**
- * Map a Paddle failure to the HTTP answer your own API gives (the routing skill's table 1b.4).
+ * Map a Paddle failure to the HTTP answer your own API gives.
  * Log `paddleError(err)` (including `detail`) with the requestId before answering.
  * - 4xx other than 401/403/429: the same status, Paddle's `code` and field messages, so the caller
  *   learns what to change. Paddle's free-text `detail` stays in the log.

@@ -51,4 +51,6 @@ Agent, once the owner confirms 1–5:
 
 ## Rollback
 
-Switch `PADDLE_ENV` back to `sandbox` with the sandbox secrets and the sandbox `plan_catalog` rows (price IDs differ between accounts); the code is identical. Live subscriptions keep billing at Paddle while the app is in sandbox, so only roll back briefly and keep the live webhook destination active (events queue up to 3 days of retries; replay anything that failed).
+Do not switch `PADDLE_ENV` back to `sandbox` while live subscriptions exist. The app would verify webhooks with the sandbox secret, so every live delivery fails, and with sandbox rows in `plan_catalog` the live prices are no longer listed, so paying customers lose access (`getEntitlement` grants access only for a listed price).
+
+To roll back, stop selling and leave everything else on the live configuration: turn off the checkout routes and buy buttons (answer a new purchase with a notice), and keep the live webhook route, the entitlement check and the portal running. If the code is the problem, redeploy the previous build with the live configuration. If the webhook route was down, Paddle retries for up to 3 days and then stops; a delivery that failed verification was never recorded here, so replay it from Paddle (`client.notifications.replayNotification`, or Paddle > Events > Notifications) and run `paddle-jobs.ts reprocess` for anything recorded but unprocessed.

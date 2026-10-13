@@ -70,7 +70,7 @@ How the SDK reports transport, decode and configuration failures → `typescript
 
 ## What the app answers its own callers
 
-`toHttpAnswer(err)` (`errors.ts`), as the routing skill's table 1b.4 requires: a 4xx other than 401/403/429 keeps its status and returns Paddle's `code` and field messages (`fields`), so the caller learns what to change; Paddle's free-text `detail` goes to the log with the `request_id`. 401/403 → 502 and 429 → 503 with fixed messages (our credentials, our quota); 5xx → 502; an unknown outcome on a write → 502 with `outcome: "unknown"`.
+`toHttpAnswer(err)` (`errors.ts`): a 4xx other than 401/403/429 keeps its status and returns Paddle's `code` and field messages (`fields`), so the caller learns what to change; Paddle's free-text `detail` goes to the log with the `request_id`. 401/403 → 502 and 429 → 503 with fixed messages (our credentials, our quota); 5xx → 502; an unknown outcome on a write → 502 with `outcome: "unknown"`.
 
 ## What owners and buyers will report, and what to say
 

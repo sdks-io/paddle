@@ -18,7 +18,6 @@
  * - A lookup never settles a claim with an entity another claim already recorded.
  * - Claims still without a result after STALE_CLAIM_MS are listed by `paddle-jobs.ts claims`, for a
  *   person to settle (`settle-claim`) or release (`release-claim`) after checking Paddle.
- * These are the DUPLICATE CLAIMS and UNKNOWN OUTCOMES rows of the routing skill's table 1b.1.
  *
  * Updates that set a state (change items, cancel, pause, remove a scheduled change) are not
  * claimed: repeating them leaves the same state. Their unknown outcomes are settled by re-reading
