@@ -2,7 +2,7 @@
 
 Goal: a public pricing page (or an in-app upgrade screen) that shows each plan's price in the visitor's currency, with tax shown the way the price's tax mode says, and opens checkout for the same price.
 
-Prerequisites: recipe 01 steps 1–3 (catalog seeded, `plan_catalog` rows) and the browser setup in `templates/web/paddle-browser.ts` (client-side token).
+Prerequisites: the catalog is seeded, `plan_catalog` has a row for every price you will show, and the browser is set up with the client-side token (`templates/web/paddle-browser.ts`).
 
 ## Step 1 — Plans and price IDs
 
@@ -34,8 +34,8 @@ Needs: the map from step 2. Produces: the pricing page.
 
 ## Step 4 — Open checkout for the price shown
 
-- `openCheckout` with the price ID the page displayed (recipe 01 step 6). Paddle detects the location again at checkout, so the currency and tax match the preview.
-- The click grants nothing; access comes from the webhook (SKILL.md section 15).
+- Open checkout for the price ID the page displayed: `openCheckout(config, { items: [{ priceId }], userId, customer: { email } })` (`paddle-browser.ts`). Pass `customer: { id }` once the user is linked to a Paddle customer, and `discountCode` to apply a code. `userId` becomes `customData.user_id`, which is how the webhook maps the subscription to the user. Paddle detects the location again at checkout, so the currency and tax match the preview.
+- The click grants nothing: access comes only from the rows the webhook writes, never from the checkout event or the success URL.
 
 ## Checks
 
