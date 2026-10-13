@@ -2,9 +2,9 @@
 
 Sandbox and live are separate Paddle accounts. Nothing is shared: catalog, customers, API keys, client-side tokens, notification destinations, default payment link, checkout settings. Everything created in sandbox is recreated in live.
 
-## When to raise each step
+## When to bring up each step
 
-| Moment | Raise |
+| Moment | Bring up with the user |
 | --- | --- |
 | The user names the production domain (any time) | Domain approval, because it is the step that takes longest (often automatic; otherwise 5–7 business days). Each domain and subdomain that opens a checkout must be approved separately; the site must show pricing, Terms & Conditions with the company name, Refund Policy, Privacy Policy, and use HTTPS |
 | The sandbox flow passes (recipe 01 step 8) | Live account signup and business/identity verification (owner only); nothing else yet |

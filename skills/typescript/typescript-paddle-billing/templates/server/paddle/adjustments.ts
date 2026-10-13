@@ -5,7 +5,7 @@
  * customer. Your side: create the adjustment, then wait for adjustment.updated;
  * the webhook handler marks the refunded purchase lines.
  *
- * Rules (Paddle docs):
+ * Rules:
  * - refund: transaction must be completed. On live, most refunds go to
  *   pending_approval and Paddle reviews them (auto-approved when the account is
  *   verified, the amount is ≤ ~$400 and within balance, and not a bank transfer).

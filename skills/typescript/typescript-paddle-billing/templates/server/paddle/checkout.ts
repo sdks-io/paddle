@@ -9,8 +9,8 @@
  *   listCatalog               active prices with their products, from Paddle
  *   previewLocalizedPrices    tax-inclusive, localized amounts for a pricing page
  *
- * Creates go through claimedWrite (writes.ts). Signatures verified against paddle-apimatic-sdk
- * 0.0.4 (sdk-map 0.0.4). Re-check map/operations/*.md after an SDK version bump.
+ * Creates go through claimedWrite (writes.ts). Written for paddle-apimatic-sdk 0.0.4; if the
+ * installed version differs, check the signatures in the SDK's map/operations/*.md.
  */
 import type { AddressPreview, CountryCodeSupported, CurrencyCode, TransactionItemCreate } from "paddle-apimatic-sdk";
 import { getPaddleClient } from "./client.js";

@@ -4,7 +4,7 @@
  * paddle_purchases); never trusts anything the browser sends (success URL,
  * query params, checkout.completed in the page, a typed email).
  *
- * Access by subscription status (Paddle's provisioning guidance):
+ * Access by subscription status:
  *   trialing  → full access
  *   active    → full access (a scheduled cancel keeps access until it takes effect)
  *   past_due  → full access + "update your payment method" banner (Paddle is retrying)

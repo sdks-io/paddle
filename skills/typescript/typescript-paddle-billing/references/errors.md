@@ -11,7 +11,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | 403 `forbidden` | key lacks the permission (e.g. `transaction.write`) | create a key with the needed `entity.read/write` scopes; previews need `transaction.read` |
 | 404 `not_available_in_sandbox` | endpoint live-only | test in live or skip |
 | `transaction_default_checkout_url_not_set` | default payment link missing | add the domain under website approval, then set the link under Paddle > Checkout > Checkout settings (SKILL.md section 9, "Default payment link (sandbox)") |
-| "Enter a valid URL" when saving the default payment link | the domain has not been added under website approval (seen in sandbox for `https://localhost`) | add the domain first; sandbox approves it at once |
+| "Enter a valid URL" when saving the default payment link | the domain has not been added under website approval (sandbox does this for `https://localhost`) | add the domain first; sandbox approves it at once |
 | `transaction_checkout_url_domain_is_not_approved` | live `checkout.url` on an unapproved domain | submit the domain for approval; use an approved one |
 | Paddle.js checkout does not open on the live site; `checkout_domain_domain_not_approved` from the Checkout domains API | domain not approved | domain approval (go-live.md) |
 | Paddle.js: checkout does not open | `test_` token with `production`, or `live_` with `sandbox`; token revoked | match token to environment; both come from the same account |
@@ -70,7 +70,7 @@ How the SDK reports transport, decode and configuration failures → `typescript
 
 ## What the app answers its own callers
 
-`toHttpAnswer(err)` (`errors.ts`): a 4xx other than 401/403/429 keeps its status and returns Paddle's `code` and field messages (`fields`), so the caller learns what to change; Paddle's free-text `detail` goes to the log with the `request_id`. 401/403 → 502 and 429 → 503 with fixed messages (our credentials, our quota); 5xx → 502; an unknown outcome on a write → 502 with `outcome: "unknown"`.
+`toHttpAnswer(err)` (`errors.ts`): a 4xx other than 401/403/429 keeps its status and returns Paddle's `code` and field messages (`fields`), so the caller learns what to change; Paddle's free-text `detail` goes to the log with the `request_id`. 401/403 → 502 and 429 → 503 with fixed messages (the app's credentials, the app's quota); 5xx → 502; an unknown outcome on a write → 502 with `outcome: "unknown"`.
 
 ## What owners and buyers will report, and what to say
 
@@ -79,7 +79,7 @@ How the SDK reports transport, decode and configuration failures → `typescript
 | "I paid but nothing unlocked" | webhook not received or failed; price missing from `plan_catalog`; user not mapped (no `custom_data.user_id`, different email) | `paddle-inspect.ts customer <email>` shows the subscription; `paddle-inspect.ts webhooks` shows delivery; check `paddle_webhook_events` for the event and its `error`. Not received: replay the notification. Ignored: add the price, `paddle-jobs.ts reopen ignored`. Unmapped: the row has no user; `ensureCustomer` assigns it at the user's next sign-in |
 | "My card was charged twice" | two transactions created (double click without a claim), or a renewal plus an upgrade proration | `paddle-inspect.ts customer`: two `completed` transactions? refund one (recipe 05); create checkouts through `createCheckoutTransaction` with `checkoutClaimKey` |
 | "The price shows in the wrong currency / with tax added" | `tax_mode`, localization by IP, country override | explain Paddle localizes by location; set overrides or `tax_mode` (recipe 08) |
-| "I cancelled but I'm still being charged" | cancel scheduled for period end and renewal happened before? or portal cancel on a different subscription | check `scheduled_change` and `canceled_at`; refund if the policy says so |
+| "I cancelled but I'm still being charged" | the cancel was scheduled for the period end and a renewal came first, or the cancel was on a different subscription | check `scheduled_change` and `canceled_at`; refund if the policy says so |
 | "I cancelled and lost access immediately" | immediate cancel used | default to `next_billing_period`; restore via new checkout only |
 | "Customer says they never got an invoice" | Paddle emails the customer's checkout email; spam; zero-value transaction has none | portal → invoices; `getInvoiceUrl` |
 | "The refund is still 'pending'" | live refunds are reviewed by Paddle unless small and the account is verified | normal; `adjustment.updated` will arrive |

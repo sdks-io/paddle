@@ -10,12 +10,14 @@
  *
  * Events are applied oldest first, so a subscription's history replays in order (the handler
  * also ignores anything older than the stored row). An event that keeps failing is parked as
- * "gave_up" after `maxAttempts` and reported through onEventNeedsAttention. Each event is leased
+ * "gave_up" after `maxAttempts` (failures in the route count too) and reported through
+ * onEventNeedsAttention. Each event is leased
  * (store.leasePendingEvents, one event at a time): the job skips events received or attempted in
  * the last `leaseMs`, so it does not run an event the webhook route is still processing, and two
- * instances do not run the same event while one is within its lease. Events whose attempts ran out
- * (failures in the route count too) are parked as "gave_up" and reported. Build the handler with the app's hooks (createPaddleWebhookHandler in setup.ts), so
- * a re-run sends the same emails and grants the same credits as a live delivery.
+ * instances do not run the same event while one is within its lease.
+ *
+ * Build the handler with the app's hooks (createPaddleWebhookHandler in setup.ts), so a re-run
+ * sends the same emails and grants the same credits as a live delivery.
  */
 import type { PaddleStore } from "../store.js";
 import type { PaddleWebhookHandler } from "./handler.js";
