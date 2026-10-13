@@ -82,8 +82,4 @@ How the SDK reports transport, decode and configuration failures → `typescript
 | "I cancelled but I'm still being charged" | cancel scheduled for period end and renewal happened before? or portal cancel on a different subscription | check `scheduled_change` and `canceled_at`; refund if the policy says so |
 | "I cancelled and lost access immediately" | immediate cancel used | default to `next_billing_period`; restore via new checkout only |
 | "Customer says they never got an invoice" | Paddle emails the customer's checkout email; spam; zero-value transaction has none | portal → invoices; `getInvoiceUrl` |
-| "The refund is still 'pending'" | live refunds are reviewed by Paddle unless small and the account is verified | normal; `adjustment.updated` will arrive |
-| "Checkout says domain not approved" (live) | subdomain not submitted | approve each domain/subdomain |
-| "Checkout does not open on my phone's in-app browser" | third-party frames blocked | open in the system browser or use `checkout.url` |
 | "Payments stopped working today" | API key expired (90 days) or revoked after exposure | `api_key.expired`/`api_key_exposure.created`; new key, redeploy |
-| "Where do I see my money?" | — | the live dashboard's payouts and transactions areas; monthly payouts; fees in `payout_totals` |

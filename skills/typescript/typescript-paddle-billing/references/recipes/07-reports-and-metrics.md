@@ -29,10 +29,6 @@ Types: `transactions`, `transaction_line_items`, `adjustments`, `adjustment_line
 
 `client.transactions.listTransactions` filtered by the customer and, when needed, by status; at most 30 per page (page with `listAll`); include `adjustments` to show refunds (fields: `map/operations/transactions.md`). Invoice PDF per transaction: `getInvoiceUrl`. Subscription history (who changed what): `client.subscriptionHistoryApi.listSubscriptionHistory({ subscriptionId, orderBy: "id[DESC]" })` (Paddle sorts history only by `id`; fields: `map/operations/subscription-history-api.md`).
 
-## Where the owner looks instead
-
-The Paddle dashboard (`vendors.paddle.com`): reports and exports, transactions, customers, payouts and statements (monthly payouts), and the notifications log for webhook deliveries (replay with `client.notifications.replayNotification`). Point the owner there from the first sale.
-
 ## Done when
 
 The owner can open the dashboard areas above; CSV exports work in sandbox; in-app metrics handle sandbox's 404 `not_available_in_sandbox` and are confirmed on live.

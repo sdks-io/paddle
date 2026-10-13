@@ -56,11 +56,11 @@ Needs: one-time prices for the packs (recipe 02), `credit_ledger` table. Produce
 3. On an approved refund or a chargeback, the handler marks the lines and calls `onPurchaseRefunded(purchase, refundedItems, adjustment)`: add `-credits × quantity` per refunded line with reason `refund` and `ref: adjustment.id + ":" + line.lineItemId`. (`templates/tests/webhook-handler.test.mts` shows both hooks.)
 4. Show the balance and a "buy more" button; optionally auto-top-up with pattern B when a subscription exists.
 
-Credits never expire unless the app enforces it; say so to the user, since some jurisdictions regulate expiring prepaid credits.
+Credits never expire unless the app enforces it.
 
 ## What to tell the user
 
-Use the fixed wording in SKILL.md section 14 ("Paddle does not meter usage itself…"). Record the chosen pattern in `paddle-api-plan.md` so later sessions do not switch it.
+Say plainly that Paddle does not meter usage itself, offer patterns A–D and let the user choose. Record the chosen pattern in `paddle-api-plan.md` so later sessions do not switch it.
 
 ## Done when
 

@@ -1,8 +1,8 @@
-# Recipe 08 — Merchant-of-record flows: tax, localized prices, invoices, portal, obligations
+# Recipe 08 — Merchant-of-record flows: tax, localized prices, invoices
 
-Goal: the app sells worldwide with Paddle as the seller of record: correct tax category and tax display, localized prices, Paddle's invoices, receipts and credit notes reaching customers, and the website showing what Paddle requires.
+Goal: the app sells worldwide with Paddle as the seller of record: correct tax category and tax display, localized prices, Paddle's invoices, receipts and credit notes reaching customers.
 
-Paddle is the legal seller of record. It calculates, collects and remits sales tax, VAT and GST worldwide; it is liable for PCI compliance, refunds and chargebacks; its name appears on the customer's statement next to the owner's. The owner never registers for tax in buyer countries. This recipe sets the tax-related choices and the customer-facing documents correctly; everything here is part of the default setup.
+Paddle is the seller of record: it calculates, collects and remits tax and issues the invoices and credit notes; the app never computes tax. This recipe sets the tax-related choices and the customer-facing documents correctly; everything here is part of the default setup.
 
 ## 1. Tax category and tax mode
 
@@ -26,25 +26,10 @@ Needs: target countries and amounts. Produces: `unit_price_overrides` on prices;
 - In-app download: `getInvoiceUrl(transactionId)` (completed transactions; URL valid one hour; none for zero-value transactions) and `getCreditNoteUrl(adjustmentId)`.
 - Customer details on an invoice (name, business name, tax ID, address lines) can be corrected once per transaction with `client.transactions.reviseTransaction(...)`; the country cannot change; a revised PDF is re-sent. Collect the business name and tax ID at checkout (`customer.business`, and `showAddTaxId` is on by default) to avoid revisions.
 
-## 4. Customer portal
-
-`createPortalSession(customerId, subscriptionIds)` → `overviewUrl` plus per-subscription `cancelUrl` and `updatePaymentMethodUrl`. The portal lets customers see payments, download invoices, update the payment method and cancel. Create a session per visit; do not store or iframe the links. Customers can also reach the portal from Paddle's emails.
-
-## 5. Chargebacks and refunds
-
-Paddle handles disputes; the app only reacts to `adjustment.*` (recipe 05). The owner's refund policy must be published on the site (required for domain approval) and the app should follow it consistently; buyers can also contact Paddle directly as the seller of record, so the owner's policy and Paddle's handling should not contradict each other.
-
-## 6. Owner obligations the agent cannot do
-
-- Business and identity verification, payout details (bank transfer or Payoneer), balance currency, tax category approvals, Sales tax inclusive/exclusive setting: Paddle dashboard, owner only.
-- Website content: visible pricing, Terms and Conditions naming the company, Refund Policy, Privacy Policy, HTTPS, and products within Paddle's Acceptable Use Policy. Paddle reviews these at domain approval (every domain and subdomain that opens a checkout).
-- Fees: 5% + $0.50 per transaction (bespoke for sub-$10 items and high volume); payouts monthly with statements. The owner sees fees and earnings per transaction in `details.payout_totals` and in Paddle > Payouts.
-- Prohibited products: Paddle's Acceptable Use Policy decides. It restricts, among others, gambling, adult content, financial services, crypto, physical goods, pure consulting or services, VPNs, unauthorized resale, and content using someone's likeness. If the product is near any of these, tell the owner to confirm with Paddle before building.
-
-## 7. Data handling
+## 4. Data handling
 
 The app never receives card data; Paddle.js and Paddle's checkout handle PCI scope. Store only what `schema.sql` lists; leave `include_sensitive_fields` off on destinations; do not log webhook payloads with customer addresses in plain text beyond what the events table needs for retries (or redact `data.address`/`data.customer` before storing).
 
-## 8. Done when
+## 5. Done when
 
-Tax category and tax mode are confirmed with the owner, the pricing page shows Paddle-computed localized totals, the invoice link works for a completed sandbox transaction, and the site has the four required pages (pricing, terms, refund policy, privacy policy).
+Tax category and tax mode are confirmed with the owner, the pricing page shows Paddle-computed localized totals, and the invoice link works for a completed sandbox transaction.

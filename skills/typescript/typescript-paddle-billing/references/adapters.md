@@ -40,7 +40,6 @@ Static `pay.html` at the default payment link path. Map `PaywallError` to 402 in
 - Entitlement: a route handler `app/api/billing/entitlement/route.ts`, or read `getEntitlement` directly in server components for gating pages.
 - Public env: `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN`, `NEXT_PUBLIC_PADDLE_ENV`. `PaddleCheckoutButton.tsx` is a client component; it starts with `"use client"`, which other React setups ignore.
 - Default payment link page: `app/pay/page.tsx` rendering the Paddle.js script (or the static `pay.html` in `public/`).
-- Paddle also publishes a Next.js starter kit and React components (`@paddle/inline-checkout` via the shadcn registry); they are compatible with this flow but not required.
 
 ## Replit
 
