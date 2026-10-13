@@ -21,7 +21,7 @@ Owner, in the live dashboard (`vendors.paddle.com`):
 2. Website approval: every checkout domain approved.
 3. Default payment link set to the real page (e.g. `https://app.example.com/pay`) on an approved domain.
 4. Checkout settings mirrored from sandbox: payment methods, styling, Sales tax inclusive/exclusive, balance currency, taxable categories approved as needed.
-5. Live API key with the same permissions as sandbox, stored by the owner as `PADDLE_API_KEY` in the production secret store (API key message in SKILL.md section 14, with the live dashboard `https://vendors.paddle.com` and prefix `pdl_live_apikey_`).
+5. Live API key with the same permissions as sandbox, stored by the owner as `PADDLE_API_KEY` in the production secret store (API key message in `references/user-messages.md`, with the live dashboard `https://vendors.paddle.com` and prefix `pdl_live_apikey_`).
 6. Payout details (bank transfer or Payoneer).
 
 Agent, once the owner confirms 1–5:
@@ -29,7 +29,7 @@ Agent, once the owner confirms 1–5:
 7. Set production env: `PADDLE_ENV=production` and browser `environment: "production"`; against production, run `paddle-setup.ts client-token --env-file .env.production` and set `PADDLE_CLIENT_TOKEN` (the live token starts with `live_`) in the production configuration.
 8. `npx tsx scripts/paddle/paddle-inspect.ts whoami` against production (prints `environment: production`).
 9. Seed the live catalog with the same `paddle-catalog.json`: `paddle-seed-catalog.ts` → **new** price IDs. Update `plan_catalog` (and any env vars) with the live IDs; sandbox IDs (`pri_…`) will not exist in live.
-10. Create the live destination the same way (SKILL.md section 7): `paddle-setup.ts webhook https://app.example.com/api/paddle/webhook --env-file .env.production`. Put `PADDLE_WEBHOOK_SECRET` from that file into the production secret store without printing it (with the platform's secret tooling; where only the owner can set production secrets, ask them to copy it from the file), then delete the file. Allow live IPs if filtering (`getIpAddresses()` in production).
+10. Create the live destination the same way (`references/credentials.md`): `paddle-setup.ts webhook https://app.example.com/api/paddle/webhook --env-file .env.production`. Put `PADDLE_WEBHOOK_SECRET` from that file into the production secret store without printing it (with the platform's secret tooling; where only the owner can set production secrets, ask them to copy it from the file), then delete the file. Allow live IPs if filtering (`getIpAddresses()` in production).
 11. Deploy. Run a real purchase of the cheapest price with a real card; confirm the webhook row, the entitlement and the invoice email; then refund it (recipe 05; live refund may wait for approval).
 12. Verify Paddle.js shows no Test Mode watermark and that `Paddle.Environment.set("sandbox")` / `environment: "sandbox"` is gone from production builds.
 
