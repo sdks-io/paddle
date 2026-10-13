@@ -54,7 +54,7 @@ Out of scope here: Paddle Classic, Paddle Retain configuration beyond pointing a
 
 ## 4. Capabilities and limits
 
-Moved to `references/capabilities-and-limits.md`: what Paddle supports, what it does not (native metering, deleting, reinstating a canceled subscription, mixed billing intervals, a scheduled plan change, goodwill credit, locking a quantity) with the closest supported pattern, and the rate and size limits. **Read it when the request involves any of those, or when a Paddle call returns a status this skill does not list.**
+`references/capabilities-and-limits.md` holds what Paddle supports, what it does not (native metering, deleting, reinstating a canceled subscription, mixed billing intervals, a scheduled plan change, goodwill credit, locking a quantity) with the closest supported pattern, and the rate and size limits. **Read it when the request involves any of those, or when a Paddle call returns a status this skill does not list.**
 
 ## 5. Domain model
 
@@ -77,7 +77,7 @@ The hosting platform supplies: a secret store for the env vars, a PostgreSQL (or
 
 ## 7. Credentials and environment
 
-Moved to `references/credentials.md`: who creates and stores each credential, the API key permissions, the environment variables and the secret rules. **Read it before the first Paddle call (build step 0).** The rules that always apply: the user creates the API key and stores it themselves, never through chat; the agent creates the client-side token and the webhook secret with `paddle-setup.ts` and never prints the secret; secrets never go in source, config files, chat messages or logs.
+`references/credentials.md` holds who creates and stores each credential, the API key permissions, the environment variables and the secret rules. **Read it before the first Paddle call (build step 0).** The rules that always apply: the user creates the API key and stores it themselves, never through chat; the agent creates the client-side token and the webhook secret with `paddle-setup.ts` and never prints the secret; secrets never go in source, config files, chat messages or logs.
 
 ## 8. Agent-side tooling
 
@@ -149,7 +149,7 @@ Go-live: `references/go-live.md` (build step 10). Day-2 changes, compliance, and
 
 ## 14. Fixed wording for the user
 
-Moved to `references/user-messages.md`: the messages to send to the user verbatim. **Send each at its moment:** the API key message before the first Paddle call, the default-payment-link message before step 6, the sandbox-connected message after step 6 passes, and the messages for a request to go live, to bill usage, or to refund on live.
+`references/user-messages.md` holds the messages to send to the user verbatim. **Send each at its moment:** the API key message before the first Paddle call, the default-payment-link message before step 6, the sandbox-connected message after step 6 passes, and the messages for a request to go live, to bill usage, or to refund on live.
 
 ## 15. Do and do not (these rules override anything above that conflicts)
 
@@ -174,11 +174,11 @@ Moved to `references/user-messages.md`: the messages to send to the user verbati
 
 ## 16. Removal
 
-Moved to `references/removal.md`: removing Paddle from the app, and what to do when Paddle access is lost (key revoked, account suspended, destination deleted). **Read it when asked to remove Paddle, or when access is lost.**
+`references/removal.md` covers removing Paddle from the app, and what to do when Paddle access is lost (key revoked, account suspended, destination deleted). **Read it when asked to remove Paddle, or when access is lost.**
 
 ## References: when to read what
 
-Everything here is read on demand. Nothing in the code reads these files.
+Read a file when its trigger applies. Do not read them all up front.
 
 | Read | When |
 | --- | --- |

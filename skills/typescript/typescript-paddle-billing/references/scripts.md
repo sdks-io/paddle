@@ -1,6 +1,6 @@
 # Agent-side tooling
 
-*Moved from SKILL.md section 8. Read it before running an agent script.*
+*Read this before running an agent script.*
 
 Copy `scripts/` to `scripts/paddle/` in the project and run with `npx tsx --env-file=.env scripts/paddle/<name>.ts` (drop `--env-file` where the platform sets the env vars itself). They read the same env vars as the app, so credentials never pass through chat; the one secret a script produces (the webhook endpoint secret) is written to `.env`, never printed.
 

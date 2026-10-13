@@ -1,6 +1,6 @@
 # Credentials and environment
 
-*Moved from SKILL.md section 7. Read it before the first Paddle call (build step 0), and again at go-live.*
+*Read this before the first Paddle call (build step 0), and again at go-live.*
 
 Four values connect the app to Paddle. Who creates each one, and where it goes:
 

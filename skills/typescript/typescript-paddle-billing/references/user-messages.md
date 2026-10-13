@@ -1,6 +1,6 @@
 # Fixed wording for the user
 
-*Moved from SKILL.md section 14. Read it when you must send the user one of these messages: before the first Paddle call, before build step 6, and after step 6 passes.*
+*Read this when you must send the user one of these messages: before the first Paddle call, before build step 6, and after step 6 passes.*
 
 Send these verbatim at the moment named.
 

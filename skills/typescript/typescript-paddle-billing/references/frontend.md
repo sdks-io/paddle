@@ -1,6 +1,6 @@
 # Frontend wiring
 
-*Moved from SKILL.md section 11. Read it at build step 6 and before building a pricing page.*
+*Read this at build step 6 and before building a pricing page.*
 
 - A **buy button** calls `openCheckout` (Paddle.js overlay) with the price ID, `customData.user_id`, and the customer's `id` (when linked) or `email`. No server round-trip is needed for a plain price. Use a server-created transaction (`createCheckoutTransaction` → `openTransactionCheckout`) when the server must fix items, seats or custom data.
 - **After payment**, `checkout.completed` fires in the page: show "setting up your account" and poll `/api/billing/entitlement` until `hasAccess` is true (`PaddleCheckoutButton.tsx`). Never unlock from the event or from `successUrl`.

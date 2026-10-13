@@ -1,6 +1,6 @@
 # Day-2, compliance and placeholder prices
 
-*Moved from SKILL.md section 13. Read it after launch (day-2 changes), for compliance questions, and for placeholder prices when nobody can name prices.*
+*Read this after launch (day-2 changes), for compliance questions, and for placeholder prices when nobody can name prices.*
 
 **Day-2**: the owner changes prices, names, trials and discount codes in Paddle > Catalog with no deploy; the app picks them up because it reads Paddle. A new plan needs one `plan_catalog` row (events and access for prices not listed there are ignored) — code only if the feature set changes. After adding a row for a price that already sold, run `paddle-jobs.ts reopen ignored` so its earlier events are applied. For later changes the agent runs `paddle-inspect.ts` to look IDs up and writes a fresh small script; it never reuses the seed file or IDs quoted in earlier chat. Revenue, customers, transactions, payouts, refunds and tax reports are in the Paddle dashboard (`vendors.paddle.com` / `sandbox-vendors.paddle.com`); `backoffice.ts` fetches metrics and CSV reports if the app must show them. Further operations: `sdk-map.md` → `map/operations/*.md`.
 

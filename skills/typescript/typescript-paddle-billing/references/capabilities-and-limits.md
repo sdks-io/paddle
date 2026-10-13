@@ -1,6 +1,6 @@
 # Capabilities, limits and the domain model
 
-*Moved from SKILL.md sections 4 and 5. Read it when the request involves metering, deleting, reinstating, mixed billing intervals, a scheduled plan change, goodwill credit or locking a quantity; when a Paddle call returns a status this skill does not list; or when you need an ID prefix or a status.*
+*Read this when the request involves metering, deleting, reinstating, mixed billing intervals, a scheduled plan change, goodwill credit or locking a quantity; when a Paddle call returns a status this skill does not list; or when you need an ID prefix or a status.*
 
 ## Capabilities and limits
 

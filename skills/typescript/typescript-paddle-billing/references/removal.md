@@ -1,6 +1,6 @@
 # Removal
 
-*Moved from SKILL.md section 16. Read it when asked to remove Paddle from the app, or when Paddle access is lost.*
+*Read this when asked to remove Paddle from the app, or when Paddle access is lost.*
 
 To remove Paddle from the app: deactivate or delete the notification destination (`updateNotificationSetting({ notificationSettingId, body: { active: false } })` or the dashboard); remove the env vars; delete `server/paddle/`, `scripts/paddle/`, the web files and the routes; keep the tables until the data is exported (transactions and invoices stay in Paddle). Do not archive products or cancel subscriptions as part of code removal; those are business decisions the owner makes in the dashboard, and canceling is irreversible.
 
