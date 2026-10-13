@@ -143,7 +143,6 @@ function build() {
 
   const out = [];
   out.push("# Templates index", "");
-  out.push("<!-- Generated from each template's header comment by tools/build-paddle-billing-template-index.mjs; do not edit by hand. -->", "");
   out.push("**Do not read a template to copy it.** The templates total " + kb(all) + "; reading one to retype it costs its tokens twice and risks changing behaviour the tests pin.", "");
   out.push("1. Copy with the shell, keeping the relative path (`cp`, `Copy-Item`). Nothing is gained by opening the file first. Copy only the files the build step names; never copy a whole directory, which brings recipe-gated modules and the adapter you do not use.");
   out.push("2. Open a file only when its **Use** is `adapt`, or to look up one signature: search the file for the export (`grep -n \"export\"`) and read just that function.");

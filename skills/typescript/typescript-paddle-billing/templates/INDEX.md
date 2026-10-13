@@ -1,7 +1,5 @@
 # Templates index
 
-<!-- Generated from each template's header comment by tools/build-paddle-billing-template-index.mjs; do not edit by hand. -->
-
 **Do not read a template to copy it.** The templates total 303.2 KB; reading one to retype it costs its tokens twice and risks changing behaviour the tests pin.
 
 1. Copy with the shell, keeping the relative path (`cp`, `Copy-Item`). Nothing is gained by opening the file first. Copy only the files the build step names; never copy a whole directory, which brings recipe-gated modules and the adapter you do not use.
