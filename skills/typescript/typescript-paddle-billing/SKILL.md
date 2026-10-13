@@ -21,7 +21,8 @@ User goals it serves, in business terms:
 | Refund or credit a customer, issue a credit note | `references/recipes/05-refunds-and-credits.md` | On request, usually after launch |
 | Offer discount codes and promotions | `references/recipes/06-discounts.md` | On request |
 | Export sales data, show MRR and subscriber counts to the owner | `references/recipes/07-reports-and-metrics.md` | On request |
-| Sell worldwide with tax handled by Paddle, show tax-inclusive localized prices, give customers Paddle's invoices | `references/recipes/08-merchant-of-record.md` | Read at step 2 for the tax category and tax mode, and when building a pricing page or invoice links |
+| Sell worldwide with tax handled by Paddle, show tax-inclusive localized prices, give customers Paddle's invoices | `references/recipes/08-merchant-of-record.md` | Read at step 2 for the tax category and tax mode, and for invoice links |
+| Show each plan's price in the visitor's currency, tax-aware, on a pricing page or upgrade screen | `references/recipes/09-pricing-page.md` | On request |
 
 Pricing models Paddle supports and this skill sets up: one-time prices; recurring prices with `billing_cycle` of day, week, month or year at any frequency; free trials (card captured, no charge), paid trials, cardless trials; per-seat quantity on a price; localized price overrides per country; tax-inclusive or tax-exclusive display. All recurring items on one subscription must share one billing interval (no yearly plan plus a monthly add-on on the same subscription).
 
@@ -187,7 +188,7 @@ Read a file when its trigger applies. Do not read them all up front.
 | `references/credentials.md` | before the first Paddle call (build step 0); again at go-live |
 | `references/user-messages.md` | when you send the user a message from it: the API key (step 0), the default payment link (step 6), sandbox connected (end of step 6) |
 | `references/recipes/01-saas-subscriptions.md` | step 2, for the seed file format; for trials, the customer portal and cardless trials |
-| `references/recipes/02` … `08` | as the table in section 1 says; recipe 08 at step 2 (tax category and tax mode) and for the pricing page and invoice links |
+| `references/recipes/02` … `09` | as the table in section 1 says; recipe 08 at step 2 (tax category and tax mode) and for invoice links; recipe 09 for a pricing page |
 | `references/webhooks.md` | step 4 |
 | `references/errors.md` | when a Paddle call or a webhook fails |
 | `references/go-live.md` | step 10, only when the user says the app is ready |

@@ -17,7 +17,7 @@ Needs: what is sold. Produces: correct `tax_category` on products, `tax_mode` on
 Needs: target countries and amounts. Produces: `unit_price_overrides` on prices; a pricing page that shows local totals.
 
 - Without an override, the price shown depends on the account's currency settings (a preview for GB can return USD); set explicit overrides for markets where you want round numbers: `client.prices.updatePrice` with the complete `unitPriceOverrides` list, each entry a set of country codes and a unit price (at most 250; an empty list removes all). Fields: `map/operations/prices.md`. Add `"unitPriceOverrides"` support to the seed file if the owner wants this managed in code; otherwise the owner edits them in the dashboard.
-- Pricing page: `Paddle.PricePreview` in the browser (geolocates by IP; `address.countryCode` to force) or `previewLocalizedPrices` on the server. Both return `formattedTotals` already including or excluding tax per the mode, and the currency Paddle will charge. Never format money yourself from `unit_price`.
+- Pricing page: `Paddle.PricePreview` in the browser (geolocates by IP; `address.countryCode` to force) or `previewLocalizedPrices` on the server. Both return `formattedTotals` already including or excluding tax per the mode, and the currency Paddle will charge. Never format money yourself from `unit_price`. Steps for the page itself: recipe 09.
 - Supported currencies: USD, EUR, GBP, JPY, AUD, CAD, CHF, HKD, SGD, SEK, ARS, BRL, CLP, CNY, COP, CZK, DKK, HUF, ILS, INR, KRW, MXN, NOK, NZD, PEN, PLN, RUB, THB, TRY, TWD, UAH, VND, ZAR. Zero-decimal: JPY, KRW, CLP, VND (`"1000"` = ¥1000).
 
 ## 3. Invoices, receipts, credit notes
