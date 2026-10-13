@@ -1,6 +1,6 @@
 # Webhooks: events, rules, handling
 
-Code: `templates/server/paddle/webhooks/*`. Destination: created or reused by the agent with `scripts/paddle-setup.ts webhook <url>` (SKILL.md section 7).
+Code: `templates/server/paddle/webhooks/*`. Destination: created or reused by the agent with `scripts/paddle-setup.ts webhook <url>` (`references/credentials.md`).
 
 ## Rules (from Paddle's webhook documentation)
 

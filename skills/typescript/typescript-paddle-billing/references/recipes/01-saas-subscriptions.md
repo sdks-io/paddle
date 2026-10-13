@@ -2,7 +2,7 @@
 
 Goal: a web app charges a monthly or yearly subscription, optionally after a free trial; paying users get the paid tier; customers manage billing themselves.
 
-Prerequisites (SKILL.md sections 6–7): sandbox account; `PADDLE_API_KEY` stored by the user (API key message, section 14) and `whoami` passing; `PADDLE_CLIENT_TOKEN` set by the agent (`paddle-setup.ts client-token`, SKILL.md section 7); database; HTTPS webhook URL.
+Prerequisites (SKILL.md section 6, `references/credentials.md`): sandbox account; `PADDLE_API_KEY` stored by the user (API key message, `references/user-messages.md`) and `whoami` passing; `PADDLE_CLIENT_TOKEN` set by the agent (`paddle-setup.ts client-token`, `references/credentials.md`); database; HTTPS webhook URL.
 
 Each step lists **Needs** (from earlier steps) and **Produces** (used later).
 
@@ -79,7 +79,7 @@ Guard paid routes: `await requireTier(store, userId, "pro", ["pro"])`; map `Payw
 
 Needs: price IDs, client token, default payment link set. Produces: a working sandbox purchase.
 
-1. Default payment link: send the user the message in SKILL.md section 14 (add the domain under website approval, then set the link under **Checkout > Checkout settings** to `https://<domain>/pay`; details in SKILL.md section 9, "Default payment link (sandbox)"). Serve `templates/web/pay.html` at that path (used for `checkout.url` and Paddle's emails).
+1. Default payment link: send the user the message in `references/user-messages.md` (add the domain under website approval, then set the link under **Checkout > Checkout settings** to `https://<domain>/pay`; details in SKILL.md section 9, "Default payment link (sandbox)"). Serve `templates/web/pay.html` at that path (used for `checkout.url` and Paddle's emails).
 2. Frontend: copy `templates/web/paddle-browser.ts` (and `PaddleCheckoutButton.tsx`). Config `{ clientToken: <public env>, environment: "sandbox" }`. The button calls `openCheckout` with `items: [{ priceId }]`, `userId`, and `customer: { email }` (or `{ id: ctm_… }` once linked). `customData.user_id` is how the webhook maps the subscription to the user.
 3. Optional server-created transaction when the server must fix items: `createCheckoutTransaction(store, { claimKey: checkoutClaimKey(userId, items), userId, customerId, items })` then `openTransactionCheckout(config, transactionId)`; `ensureCustomer` links the user first. A double click returns the same open transaction; once it is paid, the next purchase gets a new one.
 4. Test: card `4242 4242 4242 4242`, any future expiry, CVC `100`. Paddle posts `transaction.completed`, `subscription.created`, `subscription.updated`; the page polls `/api/billing/entitlement` until `hasAccess` is true.
@@ -114,4 +114,4 @@ Needs: `ctm_` link (written by the webhook or `ensureCustomer`). Produces: billi
 
 ## Step 8 — Done criteria and the message to send
 
-Done when: sandbox checkout completes; `paddle_webhook_events` holds the events; entitlement is true for the buyer; portal opens; `templates/tests/*` pass. Then send the fixed wording from SKILL.md section 14 ("Paddle is connected in sandbox…").
+Done when: sandbox checkout completes; `paddle_webhook_events` holds the events; entitlement is true for the buyer; portal opens; `templates/tests/*` pass. Then send the fixed wording from `references/user-messages.md` ("Paddle is connected in sandbox…").
