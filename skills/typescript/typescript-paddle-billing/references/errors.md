@@ -10,7 +10,7 @@ Paddle's error body: `{ error: { type: "request_error" | "api_error", code, deta
 | 403 `invalid_token` | key wrong, expired, revoked, or sandbox key against live URL (or vice versa) | check `PADDLE_ENV` vs key prefix (`config.ts` refuses mismatches); create a new key; keys expire after 90 days by default |
 | 403 `forbidden` | key lacks the permission (e.g. `transaction.write`) | create a key with the needed `entity.read/write` scopes; previews need `transaction.read` |
 | 404 `not_available_in_sandbox` | endpoint live-only | test in live or skip |
-| `transaction_default_checkout_url_not_set` | default payment link missing | add the domain under website approval, then set the link under Paddle > Checkout > Checkout settings (SKILL.md section 9, "Default payment link (sandbox)") |
+| `transaction_default_checkout_url_not_set` | default payment link missing | set it: SKILL.md section 9, "Default payment link (sandbox)" |
 | "Enter a valid URL" when saving the default payment link | the domain has not been added under website approval (seen in sandbox for `https://localhost`) | add the domain first; sandbox approves it at once |
 | `transaction_checkout_url_domain_is_not_approved` | live `checkout.url` on an unapproved domain | submit the domain for approval; use an approved one |
 | Paddle.js checkout does not open on the live site; `checkout_domain_domain_not_approved` from the Checkout domains API | domain not approved | domain approval (go-live.md) |

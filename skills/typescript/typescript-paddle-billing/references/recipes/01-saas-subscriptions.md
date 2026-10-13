@@ -48,16 +48,16 @@ Prints `{ "products": { "pro": "pro_…" }, "prices": { "pro-monthly": "pri_…"
 
 Needs: price IDs from step 2. Produces: a `PaddleStore` implementation and the `plan_catalog` rows.
 
-Run `templates/db/schema.sql` (idempotent) and use `store.pg.ts` (PostgreSQL), or port it to the project's ORM keeping the semantics in `store.ts`: `recordEvent` = insert on `event_id` that returns false only when the event was already processed; `markEventFailed` counts the attempt and leaves the event to be processed again; `upsertSubscription`/`upsertPurchase` = write only when `lastEventOccurredAt` is newer; `claimWrite` = insert under the unique key. Run `templates/tests/store.test.mts` against it.
+Run `templates/db/schema.sql` (idempotent) and use `store.pg.ts` (PostgreSQL), or port it to the project's ORM keeping the semantics in `store.ts` (its header defines them). Run `templates/tests/store.test.mts` against it.
 
-Then insert one `plan_catalog` row per price from step 2, recurring and one-time: `(price_id, product_id, tier_key='pro', display_order, features={...})`. Webhook events whose prices are not listed there, and whose products are not those rows' products, are ignored as another app's; keep this app's products to itself.
+Then insert one `plan_catalog` row per price from step 2, recurring and one-time: `(price_id, product_id, tier_key='pro', display_order, features={...})`. Events for prices not listed there are ignored as another app's (SKILL.md section 10).
 
 ## Step 4 — Webhook endpoint
 
 Needs: the store, a public HTTPS URL. Produces: `PADDLE_WEBHOOK_SECRET`, `ntfset_…`.
 
-1. Copy `templates/server/paddle/webhooks/*`. Mount with the raw body (Express: `express.raw({ type: "application/json" })` on this route, before `express.json()`; Next.js: `req.text()` on the Node runtime). Put the app's hooks (emails, credits, the owner alert in `onEventNeedsAttention`) in `webhooks/setup.ts` and build the handler with `createPaddleWebhookHandler(store)`.
-2. `npx tsx --env-file=.env scripts/paddle/paddle-setup.ts webhook https://<host>/api/paddle/webhook --name "<app>"`: it reuses the destination for that URL or creates it with the events below, and writes `PADDLE_WEBHOOK_SECRET` to `.env` without printing it (a platform that reads only its own secret store: `references/adapters.md`). Restart the server.
+1. Copy `templates/server/paddle/webhooks/*`. Mount with the raw body (`references/adapters.md`). Put the app's hooks (emails, credits, the owner alert in `onEventNeedsAttention`) in `webhooks/setup.ts` and build the handler with `createPaddleWebhookHandler(store)`.
+2. `npx tsx --env-file=.env scripts/paddle/paddle-setup.ts webhook https://<host>/api/paddle/webhook --name "<app>"` (reuses or creates the destination with the events below; secret handling: SKILL.md section 7, and `references/adapters.md` for a platform with its own secret store). Restart the server.
 3. Schedule the reprocess job: `startReprocessLoop(handler, store)` in the server, or `paddle-jobs.ts reprocess` every 5 minutes.
 4. `npx tsx --env-file=.env scripts/paddle/paddle-inspect.ts simulate <ntfset_…> subscription_creation` → expect rows in `paddle_webhook_events`. Simulated payloads use Paddle's example price IDs, so the handler records them as ignored (`error` starts with "ignored"); that proves delivery, verification and recording. The real checkout in step 6 proves the mirror.
 
@@ -73,16 +73,16 @@ const ent = await getEntitlement(store, req.user.id);
 res.json({ hasAccess: ent.hasAccess, tier: ent.tier, features: ent.features, quantity: ent.quantity, paymentPastDue: ent.paymentPastDue, endsAt: ent.endsAt });
 ```
 
-Guard paid routes: `await requireTier(store, userId, "pro", ["pro"])`; map `PaywallError` to 402 or 403. Access rules: `active`, `trialing`, `past_due` have access; `paused`, `canceled` do not; a scheduled cancel keeps access until `endsAt`.
+Guard paid routes: `await requireTier(store, userId, "pro", ["pro"])`; map `PaywallError` to 402 or 403. Access rules: SKILL.md section 12.
 
 ## Step 6 — Checkout
 
 Needs: price IDs, client token, default payment link set. Produces: a working sandbox purchase.
 
-1. Default payment link: send the user the message in SKILL.md section 14 (add the domain under website approval, then set the link under **Checkout > Checkout settings** to `https://<domain>/pay`; details in SKILL.md section 9, "Default payment link (sandbox)"). Serve `templates/web/pay.html` at that path (used for `checkout.url` and Paddle's emails).
+1. Default payment link: send the user the default-payment-link message (SKILL.md section 14; background: section 9, "Default payment link (sandbox)"). Serve `templates/web/pay.html` at that path (used for `checkout.url` and Paddle's emails).
 2. Frontend: copy `templates/web/paddle-browser.ts` (and `PaddleCheckoutButton.tsx`). Config `{ clientToken: <public env>, environment: "sandbox" }`. The button calls `openCheckout` with `items: [{ priceId }]`, `userId`, and `customer: { email }` (or `{ id: ctm_… }` once linked). `customData.user_id` is how the webhook maps the subscription to the user.
 3. Optional server-created transaction when the server must fix items: `createCheckoutTransaction(store, { claimKey: checkoutClaimKey(userId, items), userId, customerId, items })` then `openTransactionCheckout(config, transactionId)`; `ensureCustomer` links the user first. A double click returns the same open transaction; once it is paid, the next purchase gets a new one.
-4. Test: card `4242 4242 4242 4242`, any future expiry, CVC `100`. Paddle posts `transaction.completed`, `subscription.created`, `subscription.updated`; the page polls `/api/billing/entitlement` until `hasAccess` is true.
+4. Test: a sandbox test card (SKILL.md section 13). Paddle posts `transaction.completed`, `subscription.created`, `subscription.updated`; the page polls `/api/billing/entitlement` until `hasAccess` is true.
 
 With a card-required trial (free or paid) the checkout handles it: the subscription arrives as `trialing` with `next_billed_at` at trial end; Paddle charges then and sends `subscription.activated` + `subscription.updated`.
 
