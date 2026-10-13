@@ -2,7 +2,7 @@
 
 Goal: the app sells worldwide with Paddle as the seller of record: correct tax category and tax display, localized prices, Paddle's invoices, receipts and credit notes reaching customers, and the website showing what Paddle requires.
 
-Paddle is the legal seller of record. It calculates, collects and remits sales tax, VAT and GST worldwide; it is liable for PCI compliance, refunds and chargebacks; its name appears on the customer's statement next to the owner's. The owner never registers for tax in buyer countries. This recipe sets the tax-related choices and the customer-facing documents correctly; everything here is part of the default setup.
+Paddle is the legal seller of record. It calculates, collects and remits sales tax, VAT and GST worldwide; it is liable for PCI compliance, refunds and chargebacks; its name appears on the customer's statement next to the owner's. The owner never registers for tax in buyer countries. This recipe sets the tax-related choices and the customer-facing documents correctly.
 
 ## 1. Tax category and tax mode
 

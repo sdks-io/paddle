@@ -6,7 +6,7 @@
  * says whether to continue. On SDK responses they are
  * `meta.pagination.next` / `meta.pagination.hasMore` (`PaginatedMeta`).
  *
- * Per-page limits (Paddle docs): most lists default 50, max 200;
+ * Per-page limits: most lists default 50, max 200;
  * listTransactions max 30; listAdjustments max 50.
  */
 import type { PaginatedMeta } from "paddle-apimatic-sdk";

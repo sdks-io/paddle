@@ -4,7 +4,7 @@
  *   receive(rawBody, signatureHeader)  -> verify, record once
  *   process(payload)                   -> apply the event to the app's tables
  *
- * Rules this implements (from Paddle's webhook docs):
+ * Rules this implements:
  * - Verify the Paddle-Signature header against the raw body before anything else.
  * - Answer within 5 seconds. The adapters process before answering by default, so a failure
  *   answers 500 and Paddle retries (live: 60 times over 3 days; sandbox: 3 times in 15 minutes).

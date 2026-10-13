@@ -2,9 +2,9 @@
 
 Code: `templates/server/paddle/webhooks/*`. Destination: created or reused by the agent with `scripts/paddle-setup.ts webhook <url>` (`references/credentials.md`).
 
-## Rules (from Paddle's webhook documentation)
+## Rules
 
-1. **Verify first.** Header `Paddle-Signature: ts=<unix seconds>;h1=<hex>` (several `h1` during secret rotation). Signed payload is `${ts}:${rawBody}`; HMAC-SHA256 with the destination's `endpoint_secret_key` (`pdl_ntfset_…`), hex, constant-time compare. The body must be the raw bytes. Reject when `|now − ts|` exceeds the tolerance (Paddle's SDKs use 5 seconds; `PADDLE_WEBHOOK_TOLERANCE_SECONDS` to loosen when a queue runs before the handler).
+1. **Verify first.** Header `Paddle-Signature: ts=<unix seconds>;h1=<hex>` (several `h1` during secret rotation). Signed payload is `${ts}:${rawBody}`; HMAC-SHA256 with the destination's `endpoint_secret_key` (`pdl_ntfset_…`), hex, constant-time compare. The body must be the raw bytes. Reject when `|now − ts|` exceeds the tolerance (default 5 seconds; set `PADDLE_WEBHOOK_TOLERANCE_SECONDS` to loosen it when a queue runs before the handler).
 2. **Answer within 5 seconds.** The adapters process, then answer; keep hooks fast. A non-2xx or a timeout makes Paddle retry: live 60 attempts over 3 days (20 in the first hour), sandbox 3 attempts in 15 minutes; then the notification is `failed` and can be replayed with `replayNotification`. Paddle stops either way, so the reprocess job (`webhooks/reprocess.ts`, `paddle-jobs.ts reprocess`) re-runs every event still unprocessed in the app's table.
 3. **At-least-once.** The same `event_id` can arrive twice (and per destination each delivery has its own `notification_id`). Insert `event_id` into `paddle_webhook_events` first; a conflict with a processed row means skip. A row whose processing failed is processed again on the redelivery or by the reprocess job.
 3a. **Undecodable bodies are final.** A body that does not match the SDK model for its event type cannot succeed on a retry. The handler parks it (`final_state = 'undecodable'`, raw payload kept), answers 200 and calls `onEventNeedsAttention`; after an SDK upgrade, `paddle-jobs.ts reopen undecodable` applies the parked events.

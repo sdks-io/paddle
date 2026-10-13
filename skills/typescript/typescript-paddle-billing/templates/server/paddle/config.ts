@@ -52,7 +52,7 @@ export function loadPaddleConfig(env: NodeJS.ProcessEnv = process.env): PaddleCo
   const environment: PaddleEnvironment = rawEnv;
 
   const apiKey = required(env, "PADDLE_API_KEY");
-  // Key format (Paddle docs): pdl_live_apikey_... for live, pdl_sdbx_apikey_... for sandbox.
+  // Key format: pdl_live_apikey_... for live, pdl_sdbx_apikey_... for sandbox.
   const keyIsSandbox = apiKey.startsWith("pdl_sdbx_");
   const keyIsLive = apiKey.startsWith("pdl_live_");
   if (!keyIsSandbox && !keyIsLive) {

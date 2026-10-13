@@ -1,7 +1,5 @@
 # Capabilities, limits and the domain model
 
-*Read this when the request involves metering, deleting, reinstating, mixed billing intervals, a scheduled plan change, goodwill credit or locking a quantity; when a Paddle call returns a status this skill does not list; or when you need an ID prefix or a status.*
-
 ## Capabilities and limits
 
 Supported through the API and Paddle.js: products, prices (one-time, recurring, trials, per-seat quantity, localized overrides), customers/addresses/businesses, transactions (checkout, invoices, previews, revisions), subscriptions (update items, proration, pause/resume/cancel, one-off charges, payment method update), adjustments (refund, credit), discounts and discount groups, customer portal sessions, pricing previews, notification destinations, webhook simulations, events/notifications/logs, reports (CSV), metrics, client-side tokens, IP allowlist.
