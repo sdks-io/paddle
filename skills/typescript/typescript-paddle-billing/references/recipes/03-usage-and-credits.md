@@ -60,7 +60,7 @@ Credits never expire unless the app enforces it; say so to the user, since some 
 
 ## What to tell the user
 
-Use the fixed wording in SKILL.md section 14 ("Paddle does not meter usage itself…"). Record the chosen pattern in `paddle-api-plan.md` so later sessions do not switch it.
+Use the fixed wording in `references/user-messages.md` ("Paddle does not meter usage itself…"). Record the chosen pattern in `paddle-api-plan.md` so later sessions do not switch it.
 
 ## Done when
 

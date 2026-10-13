@@ -1,0 +1,52 @@
+# Templates index
+
+**Do not read a template to copy it.** The templates total 303.2 KB; reading one to retype it costs its tokens twice and risks changing behaviour the tests pin.
+
+1. Copy with the shell, keeping the relative path (`cp`, `Copy-Item`). Nothing is gained by opening the file first. Copy only the files the build step names; never copy a whole directory, which brings recipe-gated modules and the adapter you do not use.
+2. Open a file only when its **Use** is `adapt`, or to look up one signature: search the file for the export (`grep -n "export"`) and read just that function.
+3. `run` files: copy them and run them; open one only to port it to a project test runner. Never open `tests/fixtures/*`.
+4. `recipe NN` files: do not copy unless that recipe is in scope. `test double`: copy it with the tests (they import it); never use it as the app's store.
+
+| Use | Files | Size | What the agent does |
+| --- | --- | --- | --- |
+| `adapt` | 4 | 22.7 KB | read, then edit |
+| `copy` | 17 | 126.0 KB | copy; do not open |
+| `recipe` | 3 | 40.4 KB | copy when the recipe is asked for |
+| `run` | 4 | 64.4 KB | copy and run |
+| `test double` | 1 | 10.9 KB | copy with the tests |
+| `never open` | 6 | 38.7 KB | never open |
+
+| File | Use | Step | What it is | Exports |
+| --- | --- | --- | --- | --- |
+| `server/paddle/routes.express.ts` | adapt | 5 | Billing routes (Express) — Express as is; otherwise port the handlers to the project's router and auth | `billingRoutes` |
+| `server/paddle/webhooks/setup.ts` | adapt | 4 | The app's webhook handler, built in one place — put the app's reactions (emails, credits, licence keys) in its hooks | `paddleWebhookHooks`, `createPaddleWebhookHandler` |
+| `web/PaddleCheckoutButton.tsx` | adapt | 6 | React example: a "Subscribe" button and the post-checkout wait — restyle it and point it at the app's post-checkout page | `PaddleCheckoutButton` |
+| `web/pay.html` | adapt | 6 | Default payment link page — serve at the default payment link path; set the thank-you path | — |
+| `db/schema.sql` | copy | 3 | Paddle Billing: tables the app keeps — idempotent; run it with the project's migration tool | — |
+| `server/paddle/checkout.ts` | copy | 6 | Server-side pieces of checkout and self-service | `CustomerEmailNotVerifiedError`, `ensureCustomer`, `checkoutClaimKey`, `createCheckoutTransaction`, `createCardlessTrial`, `createPortalSession`, `getInvoiceUrl`, `listCatalog`, `previewLocalizedPrices` |
+| `server/paddle/client.ts` | copy | 1 | The one Paddle API client for the whole server process | `getPaddleConfig`, `getPaddleClient`, `createPaddleClient`, `usePaddleClientForTests`, `resetPaddleClientForTests` |
+| `server/paddle/config.ts` | copy | 1 | Paddle configuration: one place that reads the environment and decides which Paddle environment this deployment talks to | `loadPaddleConfig` |
+| `server/paddle/entitlements.ts` | copy | 5 | Server-side access checks | `ACCESS_GRANTING_STATUSES`, `getEntitlement`, `hasPurchased`, `PaywallError`, `requireTier` |
+| `server/paddle/errors.ts` | copy | 1 | Reading Paddle errors out of the SDK's error family (→ typescript-error-handling) | `paddleError`, `isTransportFailure`, `isRateLimited`, `writeOutcome`, `OutcomeUnknownError`, `toHttpAnswer` |
+| `server/paddle/pagination.ts` | copy | 1 | Paging through Paddle list endpoints | `nextCursor`, `listAll` |
+| `server/paddle/store.pg.ts` | copy | 3 | PaddleStore for PostgreSQL with node-postgres, against the tables in templates/db/schema.sql — PostgreSQL; port it only if the project uses an ORM | `PgPaddleStore` |
+| `server/paddle/store.ts` | copy | 3 | The storage contract the Paddle modules depend on — the contract; read only its header comment, and only to port the store to an ORM | `SubscriptionRow`, `PurchaseItem`, `PurchaseRow`, `PlanCatalogRow`, `PendingPlanChange`, `EventFinalState`, `PendingEvent`, `WriteKind`, `ClaimResult`, `PaddleStore` |
+| `server/paddle/webhooks/express.ts` | copy | 4 | Express adapter for the Paddle webhook route — copy the one that matches the framework | `paddleWebhookRoute` |
+| `server/paddle/webhooks/handler.ts` | copy | 4 | Framework-agnostic webhook handling | `PaddleWebhookHandler` |
+| `server/paddle/webhooks/nextjs.ts` | copy | 4 | Next.js (App Router) route handler for the Paddle webhook — copy the one that matches the framework | `createPaddleWebhookRoute` |
+| `server/paddle/webhooks/reprocess.ts` | copy | 4 | Re-runs webhook events that were recorded but not processed | `reprocessPendingEvents`, `startReprocessLoop` |
+| `server/paddle/webhooks/types.ts` | copy | 4 | Webhook payload models, from the SDK | `subscriptionItems`, `decodeEnvelope`, `decodeEvent` |
+| `server/paddle/webhooks/verify.ts` | copy | 4 | Paddle webhook signature verification (Paddle Billing) | `parsePaddleSignature`, `verifyPaddleSignature`, `signForTests` |
+| `server/paddle/writes.ts` | copy | 1 | The claim pattern for provider writes that create something | `WriteInProgressError`, `STALE_CLAIM_MS`, `LOOKUP_MARGIN_MS`, `claimedWrite` |
+| `web/paddle-browser.ts` | copy | 6 | Browser side: load Paddle.js once and open checkouts | `addPaddleEventListener`, `getPaddle`, `openCheckout`, `openTransactionCheckout`, `openPaymentMethodCheckout`, `openInlineCheckout`, `previewPrices` |
+| `server/paddle/adjustments.ts` | recipe 05 | 8 | Refunds, credits and goodwill — only when refunds or credits are in scope | `refundTransaction`, `creditInvoice`, `SubscriptionHasDiscountError`, `grantGoodwillDiscount`, `listAdjustments`, `getCreditNoteUrl` |
+| `server/paddle/backoffice.ts` | recipe 07 | 8 | Back-office operations: discounts, reports (CSV), metrics — only when the app must show metrics or reports | `createDiscountCode`, `findDiscountByCode`, `archiveDiscount`, `generateReportCsv`, `transactionsReport`, `getRevenueMetrics` |
+| `server/paddle/subscriptions.ts` | recipe 04 | 8 | Subscription changes, server side — only when plan changes, pause or cancel are in scope | `getSubscriptionWithNext`, `currentSubscription`, `currentItems`, `changePlan`, `chooseProrationMode`, `setSeats`, `PLAN_CHANGE_WINDOW`, `PlanChangeNotSchedulableError`, `requestPlanChangeAtRenewal`, `cancelPlanChangeAtRenewal`, +9 more |
+| `tests/store.test.mts` | run | 9 | store tests — no network; `npx tsx tests/paddle/<file>` | — |
+| `tests/webhook-handler.test.mts` | run | 9 | webhook handler tests — no network; `npx tsx tests/paddle/<file>` | — |
+| `tests/webhook-verify.test.ts` | run | 9 | webhook verify tests — no network; `npx tsx tests/paddle/<file>` | — |
+| `tests/writes.test.mts` | run | 9 | writes tests — no network; `npx tsx tests/paddle/<file>` | — |
+| `server/paddle/store.memory.ts` | test double | 9 | In-memory PaddleStore for unit tests and local experiments — copy it with the tests (they import it); never use it as the app's store | `MemoryPaddleStore` |
+| `tests/fixtures/*` (6 files) | never open | 9 | example Paddle payloads the tests read | — |
+
+Step numbers are the build steps in SKILL.md section 9.
