@@ -1,7 +1,5 @@
 # Credentials and environment
 
-*Read this before the first Paddle call (build step 0), and again at go-live.*
-
 Four values connect the app to Paddle. Who creates each one, and where it goes:
 
 | Credential | Created by | Stored as | Stored by |

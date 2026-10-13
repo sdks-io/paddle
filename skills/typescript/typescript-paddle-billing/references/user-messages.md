@@ -1,7 +1,5 @@
 # Messages to send the user
 
-*Read this when you must send the user one of these messages: before the first Paddle call, before build step 6, and after step 6 passes.*
-
 Send these verbatim at the moment named.
 
 - **Before any Paddle call (API key):** "To connect Paddle I need an API key. Please create it yourself; don't paste it here.
